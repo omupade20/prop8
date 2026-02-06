@@ -12,22 +12,14 @@ from strategy.sr_levels import compute_sr_levels, get_nearest_sr, sr_location_sc
 from strategy.vwap_filter import VWAPContext
 
 
-# =========================
-# Output Structure
-# =========================
-
 @dataclass
 class DecisionResult:
-    state: str                 # IGNORE | PREPARE_LONG | PREPARE_SHORT | EXECUTE_LONG | EXECUTE_SHORT
-    score: float               # 0 – 10
+    state: str
+    score: float
     direction: Optional[str]
     components: Dict[str, float]
     reason: str
 
-
-# =========================
-# Decision Engine
-# =========================
 
 def final_trade_decision(
     inst_key: str,
@@ -45,9 +37,7 @@ def final_trade_decision(
     components: Dict[str, float] = {}
     score = 0.0
 
-    # ==================================================
-    # 1️⃣ STRUCTURE GATE — NON-NEGOTIABLE
-    # ==================================================
+    # -------------------- STRUCTURE GATE --------------------
 
     if not breakout_signal:
         return DecisionResult("IGNORE", 0.0, None, {}, "no breakout")
@@ -55,7 +45,6 @@ def final_trade_decision(
     direction = breakout_signal["direction"]
     signal_type = breakout_signal["signal"]
 
-    # POTENTIAL → NEVER EXECUTE
     if signal_type == "POTENTIAL":
         components["breakout"] = 1.0
         return DecisionResult(
@@ -66,15 +55,11 @@ def final_trade_decision(
             reason="potential breakout"
         )
 
-    # CONFIRMED breakout
     components["breakout"] = 3.0
     score += 3.0
 
-    # ==================================================
-    # 2️⃣ HTF & REGIME AUTHORITY
-    # ==================================================
+    # -------------------- HTF & REGIME --------------------
 
-    # HTF must NOT oppose
     if direction == "LONG" and htf_bias_label.startswith("BEARISH"):
         return DecisionResult("IGNORE", 0.0, None, {}, "htf opposes long")
 
@@ -84,7 +69,6 @@ def final_trade_decision(
     components["htf"] = 1.2
     score += 1.2
 
-    # Regime filter
     if market_regime in ("WEAK", "COMPRESSION"):
         return DecisionResult("IGNORE", 0.0, None, {}, "bad market regime")
 
@@ -95,9 +79,7 @@ def final_trade_decision(
         components["regime"] = 1.2
         score += 1.2
 
-    # ==================================================
-    # 3️⃣ VWAP ACCEPTANCE (ENVIRONMENT)
-    # ==================================================
+    # -------------------- VWAP --------------------
 
     if direction == "LONG" and vwap_ctx.acceptance == "BELOW":
         return DecisionResult("IGNORE", 0.0, None, {}, "below VWAP")
@@ -108,30 +90,36 @@ def final_trade_decision(
     components["vwap"] = vwap_ctx.score
     score += vwap_ctx.score
 
-    # ==================================================
-    # 4️⃣ PARTICIPATION (VOLUME + VOLATILITY + LIQUIDITY)
-    # ==================================================
+    # -------------------- VOLUME (SLIGHTLY STRICTER) --------------------
 
     vol_ctx = analyze_volume(volumes, close_prices=closes)
+
+    if vol_ctx.score < 0.5:
+        return DecisionResult("IGNORE", 0.0, None, {}, "insufficient volume confirmation")
+
     components["volume"] = vol_ctx.score
     score += vol_ctx.score
+
+    # -------------------- VOLATILITY --------------------
 
     atr = compute_atr(highs, lows, closes)
     move = closes[-1] - closes[-2] if len(closes) > 1 else 0.0
     volat_ctx = analyze_volatility(move, atr)
+
     components["volatility"] = volat_ctx.score
     score += volat_ctx.score
 
+    # -------------------- LIQUIDITY --------------------
+
     liq_ctx = analyze_liquidity(volumes)
+
     if liq_ctx.score < 0:
         return DecisionResult("IGNORE", 0.0, None, {}, "illiquid")
 
     components["liquidity"] = liq_ctx.score
     score += liq_ctx.score
 
-    # ==================================================
-    # 5️⃣ TIMING (PA + SR + MOMENTUM)
-    # ==================================================
+    # -------------------- PRICE ACTION (MINOR GATE ADDED) --------------------
 
     pa_ctx = price_action_context(
         prices=closes,
@@ -142,26 +130,48 @@ def final_trade_decision(
         ema_short=exponential_moving_average(prices, 9),
         ema_long=exponential_moving_average(prices, 21),
     )
+
+    # small alignment gate
+    if direction == "LONG" and pa_ctx["score"] < 0:
+        return DecisionResult("IGNORE", 0.0, None, {}, "price action not supportive")
+
+    if direction == "SHORT" and pa_ctx["score"] > 0:
+        return DecisionResult("IGNORE", 0.0, None, {}, "price action not supportive")
+
     components["price_action"] = pa_ctx["score"]
     score += pa_ctx["score"]
 
+    # -------------------- SUPPORT / RESISTANCE (SLIGHTLY STRICTER) --------------------
+
     sr_levels = compute_sr_levels(highs, lows)
     nearest = get_nearest_sr(closes[-1], sr_levels)
+
     sr_score = sr_location_score(closes[-1], nearest, direction)
+
+    if sr_score < -0.3:
+        return DecisionResult("IGNORE", 0.0, None, {}, "unfavorable SR location")
+
     components["sr"] = sr_score
     score += sr_score * 0.7
 
-    # Momentum sanity
-    rsi = relative_strength_index(prices, 14)
-    if rsi:
-        if direction == "LONG" and rsi < 45:
-            score -= 0.5
-        elif direction == "SHORT" and rsi > 55:
-            score -= 0.5
+    # -------------------- RSI (STRICTER MOMENTUM) --------------------
 
-    # ==================================================
-    # 6️⃣ FINAL DECISION
-    # ==================================================
+    rsi = relative_strength_index(prices, 14)
+
+    if rsi:
+        if direction == "LONG":
+            if rsi < 50:
+                score -= 1.0
+            if rsi < 40:
+                return DecisionResult("IGNORE", 0.0, None, {}, "weak momentum long")
+
+        if direction == "SHORT":
+            if rsi > 50:
+                score -= 1.0
+            if rsi > 60:
+                return DecisionResult("IGNORE", 0.0, None, {}, "weak momentum short")
+
+    # -------------------- FINAL DECISION --------------------
 
     score = round(max(min(score, 10.0), 0.0), 2)
 

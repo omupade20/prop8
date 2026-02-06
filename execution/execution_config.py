@@ -8,7 +8,7 @@ without changing logic elsewhere.
 
 # -------- CAPITAL PER TRADE --------
 # Amount you *intend* to put per trade (in ₹)
-CAPITAL_PER_TRADE = 50000  # e.g., ₹75,000
+CAPITAL_PER_TRADE = 60000  # e.g., ₹75,000
 
 # -------- PRICE BUFFER FOR LIMIT --------
 # When placing limit orders, adjust price slightly

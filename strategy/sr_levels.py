@@ -139,7 +139,7 @@ def compute_sr_levels(
 def get_nearest_sr(
     price: float,
     sr_levels: Dict[str, List[Dict]],
-    max_search_pct: float = 0.05
+    max_search_pct: float = 0.03
 ) -> Optional[Dict]:
     """
     Find nearest support OR resistance within max_search_pct of price.
@@ -210,7 +210,7 @@ def sr_location_score(
     price: float,
     nearest_sr: Optional[Dict],
     direction: str,
-    proximity_threshold: float = 0.03
+    proximity_threshold: float = 0.015
 ) -> float:
     """
     Soft score in range [-1.0 .. +1.0] indicating how favorable current location is for `direction`.
