@@ -3,23 +3,30 @@
 from dataclasses import dataclass
 from typing import Optional, Dict
 
-from strategy.indicators import exponential_moving_average, relative_strength_index
 from strategy.volume_filter import analyze_volume
 from strategy.volatility_filter import analyze_volatility, compute_atr
 from strategy.liquidity_filter import analyze_liquidity
 from strategy.price_action import price_action_context
-from strategy.sr_levels import compute_sr_levels, get_nearest_sr, sr_location_score
+from strategy.sr_levels import sr_location_score
 from strategy.vwap_filter import VWAPContext
 
 
+# =========================
+# Output Structure
+# =========================
+
 @dataclass
 class DecisionResult:
-    state: str
-    score: float
+    state: str                 # IGNORE | PREPARE_LONG | PREPARE_SHORT | EXECUTE_LONG | EXECUTE_SHORT
+    score: float               # 0 – 10
     direction: Optional[str]
     components: Dict[str, float]
     reason: str
 
+
+# =========================
+# NEW PULLBACK BASED ENGINE
+# =========================
 
 def final_trade_decision(
     inst_key: str,
@@ -29,57 +36,69 @@ def final_trade_decision(
     closes: list[float],
     volumes: list[float],
     market_regime: str,
-    htf_bias_label: str,
+    htf_bias_direction: str,
     vwap_ctx: VWAPContext,
-    breakout_signal: Optional[Dict],
+    pullback_signal: Optional[Dict],
 ) -> DecisionResult:
 
     components: Dict[str, float] = {}
     score = 0.0
 
-    # -------------------- STRUCTURE GATE --------------------
+    # ==================================================
+    # 1️⃣ STRUCTURE GATE (MOST IMPORTANT)
+    # ==================================================
 
-    if not breakout_signal:
-        return DecisionResult("IGNORE", 0.0, None, {}, "no breakout")
+    if not pullback_signal:
+        return DecisionResult("IGNORE", 0.0, None, {}, "no pullback setup")
 
-    direction = breakout_signal["direction"]
-    signal_type = breakout_signal["signal"]
+    direction = pullback_signal["direction"]
+    signal_type = pullback_signal["signal"]
 
+    # Potential setups only PREPARE
     if signal_type == "POTENTIAL":
-        components["breakout"] = 1.0
+        components["structure"] = 1.5
         return DecisionResult(
             state=f"PREPARE_{direction}",
-            score=1.0,
+            score=1.5,
             direction=direction,
             components=components,
-            reason="potential breakout"
+            reason="potential pullback"
         )
 
-    components["breakout"] = 3.0
+    # CONFIRMED pullback gets structural priority
+    components["structure"] = 3.0
     score += 3.0
 
-    # -------------------- HTF & REGIME --------------------
+    # ==================================================
+    # 2️⃣ HIGHER TIMEFRAME AUTHORITY
+    # ==================================================
 
-    if direction == "LONG" and htf_bias_label.startswith("BEARISH"):
-        return DecisionResult("IGNORE", 0.0, None, {}, "htf opposes long")
+    if direction == "LONG" and htf_bias_direction != "BULLISH":
+        return DecisionResult("IGNORE", 0.0, None, {}, "htf not bullish")
 
-    if direction == "SHORT" and htf_bias_label.startswith("BULLISH"):
-        return DecisionResult("IGNORE", 0.0, None, {}, "htf opposes short")
+    if direction == "SHORT" and htf_bias_direction != "BEARISH":
+        return DecisionResult("IGNORE", 0.0, None, {}, "htf not bearish")
 
-    components["htf"] = 1.2
-    score += 1.2
+    components["htf"] = 1.5
+    score += 1.5
+
+    # ==================================================
+    # 3️⃣ MARKET REGIME GATE
+    # ==================================================
 
     if market_regime in ("WEAK", "COMPRESSION"):
         return DecisionResult("IGNORE", 0.0, None, {}, "bad market regime")
 
     if market_regime == "EARLY_TREND":
-        components["regime"] = 0.8
-        score += 0.8
+        components["regime"] = 1.0
+        score += 1.0
     elif market_regime == "TRENDING":
-        components["regime"] = 1.2
-        score += 1.2
+        components["regime"] = 1.4
+        score += 1.4
 
-    # -------------------- VWAP --------------------
+    # ==================================================
+    # 4️⃣ VWAP CONTEXT (ENVIRONMENT FILTER)
+    # ==================================================
 
     if direction == "LONG" and vwap_ctx.acceptance == "BELOW":
         return DecisionResult("IGNORE", 0.0, None, {}, "below VWAP")
@@ -90,100 +109,88 @@ def final_trade_decision(
     components["vwap"] = vwap_ctx.score
     score += vwap_ctx.score
 
-    # -------------------- VOLUME (SLIGHTLY STRICTER) --------------------
+    # ==================================================
+    # 5️⃣ VOLUME QUALITY
+    # ==================================================
 
     vol_ctx = analyze_volume(volumes, close_prices=closes)
 
-    if vol_ctx.score < 0.5:
-        return DecisionResult("IGNORE", 0.0, None, {}, "insufficient volume confirmation")
+    if vol_ctx.score < 0:
+        return DecisionResult("IGNORE", 0.0, None, {}, "bad volume")
 
     components["volume"] = vol_ctx.score
     score += vol_ctx.score
 
-    # -------------------- VOLATILITY --------------------
+    # ==================================================
+    # 6️⃣ VOLATILITY QUALITY
+    # ==================================================
 
     atr = compute_atr(highs, lows, closes)
     move = closes[-1] - closes[-2] if len(closes) > 1 else 0.0
+
     volat_ctx = analyze_volatility(move, atr)
+
+    if volat_ctx.state in ["CONTRACTING", "EXHAUSTION"]:
+        return DecisionResult("IGNORE", 0.0, None, {}, "bad volatility")
 
     components["volatility"] = volat_ctx.score
     score += volat_ctx.score
 
-    # -------------------- LIQUIDITY --------------------
+    # ==================================================
+    # 7️⃣ LIQUIDITY SAFETY
+    # ==================================================
 
     liq_ctx = analyze_liquidity(volumes)
 
     if liq_ctx.score < 0:
-        return DecisionResult("IGNORE", 0.0, None, {}, "illiquid")
+        return DecisionResult("IGNORE", 0.0, None, {}, "illiquid instrument")
 
     components["liquidity"] = liq_ctx.score
     score += liq_ctx.score
 
-    # -------------------- PRICE ACTION (MINOR GATE ADDED) --------------------
+    # ==================================================
+    # 8️⃣ PRICE ACTION TIMING
+    # ==================================================
 
     pa_ctx = price_action_context(
         prices=closes,
         highs=highs,
         lows=lows,
         opens=closes,
-        closes=closes,
-        ema_short=exponential_moving_average(prices, 9),
-        ema_long=exponential_moving_average(prices, 21),
+        closes=closes
     )
-
-    # small alignment gate
-    if direction == "LONG" and pa_ctx["score"] < 0:
-        return DecisionResult("IGNORE", 0.0, None, {}, "price action not supportive")
-
-    if direction == "SHORT" and pa_ctx["score"] > 0:
-        return DecisionResult("IGNORE", 0.0, None, {}, "price action not supportive")
 
     components["price_action"] = pa_ctx["score"]
     score += pa_ctx["score"]
 
-    # -------------------- SUPPORT / RESISTANCE (SLIGHTLY STRICTER) --------------------
+    # ==================================================
+    # 9️⃣ SR LOCATION CONFIRMATION
+    # ==================================================
 
-    sr_levels = compute_sr_levels(highs, lows)
-    nearest = get_nearest_sr(closes[-1], sr_levels)
+    nearest = pullback_signal.get("nearest_level")
 
     sr_score = sr_location_score(closes[-1], nearest, direction)
 
-    if sr_score < -0.3:
-        return DecisionResult("IGNORE", 0.0, None, {}, "unfavorable SR location")
-
     components["sr"] = sr_score
-    score += sr_score * 0.7
+    score += sr_score * 1.2
 
-    # -------------------- RSI (STRICTER MOMENTUM) --------------------
-
-    rsi = relative_strength_index(prices, 14)
-
-    if rsi:
-        if direction == "LONG":
-            if rsi < 50:
-                score -= 1.0
-            if rsi < 40:
-                return DecisionResult("IGNORE", 0.0, None, {}, "weak momentum long")
-
-        if direction == "SHORT":
-            if rsi > 50:
-                score -= 1.0
-            if rsi > 60:
-                return DecisionResult("IGNORE", 0.0, None, {}, "weak momentum short")
-
-    # -------------------- FINAL DECISION --------------------
+    # ==================================================
+    # 🔟 FINAL DECISION LOGIC
+    # ==================================================
 
     score = round(max(min(score, 10.0), 0.0), 2)
 
-    if score >= 6.0:
+    if score >= 6.5:
         state = f"EXECUTE_{direction}"
-        reason = "high quality breakout"
-    elif score >= 3.5:
+        reason = "high quality pullback trade"
+
+    elif score >= 4.0:
         state = f"PREPARE_{direction}"
-        reason = "setup forming"
+        reason = "developing pullback setup"
+
     else:
         state = "IGNORE"
-        reason = "weak follow-through"
+        reason = "insufficient edge"
 
     return DecisionResult(
         state=state,
