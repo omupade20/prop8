@@ -1,5 +1,3 @@
-# strategy/decision_engine.py
-
 from dataclasses import dataclass
 from typing import Optional, Dict
 
@@ -11,9 +9,9 @@ from strategy.sr_levels import sr_location_score
 from strategy.vwap_filter import VWAPContext
 
 
-# =========================
-# Output Structure
-# =========================
+# =====================================================
+# OUTPUT STRUCTURE
+# =====================================================
 
 @dataclass
 class DecisionResult:
@@ -24,9 +22,9 @@ class DecisionResult:
     reason: str
 
 
-# =========================
-# NEW PULLBACK BASED ENGINE
-# =========================
+# =====================================================
+# BIG-MOVE FOCUSED DECISION ENGINE (VERSION 2.0)
+# =====================================================
 
 def final_trade_decision(
     inst_key: str,
@@ -44,9 +42,9 @@ def final_trade_decision(
     components: Dict[str, float] = {}
     score = 0.0
 
-    # ==================================================
-    # 1️⃣ STRUCTURE GATE (MOST IMPORTANT)
-    # ==================================================
+    # --------------------------------------------------
+    # 1) HARD STRUCTURE GATE
+    # --------------------------------------------------
 
     if not pullback_signal:
         return DecisionResult("IGNORE", 0.0, None, {}, "no pullback setup")
@@ -54,143 +52,143 @@ def final_trade_decision(
     direction = pullback_signal["direction"]
     signal_type = pullback_signal["signal"]
 
-    # Potential setups only PREPARE
+    # POTENTIAL signals are only watchlist candidates
     if signal_type == "POTENTIAL":
-        components["structure"] = 1.5
         return DecisionResult(
             state=f"PREPARE_{direction}",
-            score=1.5,
+            score=2.0,
             direction=direction,
-            components=components,
-            reason="potential pullback"
+            components={"structure": 2.0},
+            reason="potential setup – waiting for strength"
         )
 
-    # CONFIRMED pullback gets structural priority
-    components["structure"] = 3.0
-    score += 3.0
+    # CONFIRMED only
+    components["structure"] = 4.0
+    score += 4.0
 
-    # ==================================================
-    # 2️⃣ HIGHER TIMEFRAME AUTHORITY
-    # ==================================================
+    # --------------------------------------------------
+    # 2) HTF ALIGNMENT (NON NEGOTIABLE)
+    # --------------------------------------------------
 
     if direction == "LONG" and htf_bias_direction != "BULLISH":
-        return DecisionResult("IGNORE", 0.0, None, {}, "htf not bullish")
+        return DecisionResult("IGNORE", 0.0, None, {}, "htf misaligned")
 
     if direction == "SHORT" and htf_bias_direction != "BEARISH":
-        return DecisionResult("IGNORE", 0.0, None, {}, "htf not bearish")
+        return DecisionResult("IGNORE", 0.0, None, {}, "htf misaligned")
 
-    components["htf"] = 1.5
+    components["htf"] = 2.0
+    score += 2.0
+
+    # --------------------------------------------------
+    # 3) MARKET REGIME (TREND DAYS ONLY)
+    # --------------------------------------------------
+
+    if market_regime != "TRENDING":
+        return DecisionResult("IGNORE", 0.0, None, {}, "not a trend regime")
+
+    components["regime"] = 1.5
     score += 1.5
 
-    # ==================================================
-    # 3️⃣ MARKET REGIME GATE
-    # ==================================================
+    # --------------------------------------------------
+    # 4) VWAP ENVIRONMENT (STRICT)
+    # --------------------------------------------------
 
-    if market_regime in ("WEAK", "COMPRESSION"):
-        return DecisionResult("IGNORE", 0.0, None, {}, "bad market regime")
+    if direction == "LONG" and vwap_ctx.acceptance != "ABOVE":
+        return DecisionResult("IGNORE", 0.0, None, {}, "not accepted above VWAP")
 
-    if market_regime == "EARLY_TREND":
-        components["regime"] = 1.0
-        score += 1.0
-    elif market_regime == "TRENDING":
-        components["regime"] = 1.4
-        score += 1.4
+    if direction == "SHORT" and vwap_ctx.acceptance != "BELOW":
+        return DecisionResult("IGNORE", 0.0, None, {}, "not accepted below VWAP")
 
-    # ==================================================
-    # 4️⃣ VWAP CONTEXT (ENVIRONMENT FILTER)
-    # ==================================================
+    components["vwap"] = 1.5
+    score += 1.5
 
-    if direction == "LONG" and vwap_ctx.acceptance == "BELOW":
-        return DecisionResult("IGNORE", 0.0, None, {}, "below VWAP")
-
-    if direction == "SHORT" and vwap_ctx.acceptance == "ABOVE":
-        return DecisionResult("IGNORE", 0.0, None, {}, "above VWAP")
-
-    components["vwap"] = vwap_ctx.score
-    score += vwap_ctx.score
-
-    # ==================================================
-    # 5️⃣ VOLUME QUALITY
-    # ==================================================
+    # --------------------------------------------------
+    # 5) VOLUME QUALITY (STRONG ONLY)
+    # --------------------------------------------------
 
     vol_ctx = analyze_volume(volumes, close_prices=closes)
 
-    if vol_ctx.score < 0:
-        return DecisionResult("IGNORE", 0.0, None, {}, "bad volume")
+    if vol_ctx.score < 1.0:
+        return DecisionResult("IGNORE", 0.0, None, {}, "volume not strong enough")
 
     components["volume"] = vol_ctx.score
     score += vol_ctx.score
 
-    # ==================================================
-    # 6️⃣ VOLATILITY QUALITY
-    # ==================================================
+    # --------------------------------------------------
+    # 6) VOLATILITY QUALITY (EXPANSION ONLY)
+    # --------------------------------------------------
 
     atr = compute_atr(highs, lows, closes)
     move = closes[-1] - closes[-2] if len(closes) > 1 else 0.0
 
     volat_ctx = analyze_volatility(move, atr)
 
-    if volat_ctx.state in ["CONTRACTING", "EXHAUSTION"]:
-        return DecisionResult("IGNORE", 0.0, None, {}, "bad volatility")
+    if volat_ctx.state != "EXPANDING":
+        return DecisionResult("IGNORE", 0.0, None, {}, "volatility not expanding")
 
-    components["volatility"] = volat_ctx.score
-    score += volat_ctx.score
+    components["volatility"] = 1.5
+    score += 1.5
 
-    # ==================================================
-    # 7️⃣ LIQUIDITY SAFETY
-    # ==================================================
+    # --------------------------------------------------
+    # 7) LIQUIDITY SAFETY
+    # --------------------------------------------------
 
     liq_ctx = analyze_liquidity(volumes)
 
     if liq_ctx.score < 0:
         return DecisionResult("IGNORE", 0.0, None, {}, "illiquid instrument")
 
-    components["liquidity"] = liq_ctx.score
-    score += liq_ctx.score
+    components["liquidity"] = 1.0
+    score += 1.0
 
-    # ==================================================
-    # 8️⃣ PRICE ACTION TIMING
-    # ==================================================
+    # --------------------------------------------------
+    # 8) PRICE ACTION QUALITY (NEW STRICT)
+    # --------------------------------------------------
 
     pa_ctx = price_action_context(
-        prices=closes,
+        opens=closes,
         highs=highs,
         lows=lows,
-        opens=closes,
         closes=closes
     )
 
-    components["price_action"] = pa_ctx["score"]
-    score += pa_ctx["score"]
+    if pa_ctx["quality"] != "HIGH":
+        return DecisionResult("IGNORE", 0.0, None, {}, "price action not high quality")
 
-    # ==================================================
-    # 9️⃣ SR LOCATION CONFIRMATION
-    # ==================================================
+    components["price_action"] = abs(pa_ctx["score"])
+    score += abs(pa_ctx["score"])
+
+    # --------------------------------------------------
+    # 9) SR LOCATION EDGE
+    # --------------------------------------------------
 
     nearest = pullback_signal.get("nearest_level")
-
     sr_score = sr_location_score(closes[-1], nearest, direction)
 
+    if sr_score <= 0:
+        return DecisionResult("IGNORE", 0.0, None, {}, "poor SR location")
+
     components["sr"] = sr_score
-    score += sr_score * 1.2
+    score += sr_score * 1.5
 
-    # ==================================================
-    # 🔟 FINAL DECISION LOGIC
-    # ==================================================
+    # --------------------------------------------------
+    # 10) FINAL DECISION – MUCH STRICTER
+    # --------------------------------------------------
 
-    score = round(max(min(score, 10.0), 0.0), 2)
+    score = round(min(score, 10.0), 2)
 
-    if score >= 6.5:
+    # Only very high quality become EXECUTE
+    if score >= 8.0:
         state = f"EXECUTE_{direction}"
-        reason = "high quality pullback trade"
+        reason = "institutional-grade setup"
 
-    elif score >= 4.0:
+    elif score >= 6.5:
         state = f"PREPARE_{direction}"
-        reason = "developing pullback setup"
+        reason = "good setup but needs trigger"
 
     else:
         state = "IGNORE"
-        reason = "insufficient edge"
+        reason = "edge not strong enough"
 
     return DecisionResult(
         state=state,
