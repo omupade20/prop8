@@ -99,7 +99,7 @@ def analyze_volatility(
     # ----------------------
     # 2️⃣ Building Phase
     # ----------------------
-    if move_pct_atr < 1.1:
+    if move_pct_atr < 1.2:
         return VolatilityContext(
             state="BUILDING",
             score=0.2,
