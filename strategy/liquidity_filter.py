@@ -23,7 +23,7 @@ class LiquidityContext:
 
 def analyze_liquidity(
     volume_history: List[float],
-    min_avg_volume: int = 250_000,
+    min_avg_volume: int = 500_000,
     lookback: int = 30
 ) -> LiquidityContext:
     """
