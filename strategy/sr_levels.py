@@ -97,7 +97,7 @@ def compute_sr_levels(
     lows: List[float],
     lookback: int = 240,
     extrema_window: int = 5,
-    cluster_tol_pct: float = 0.005,
+    cluster_tol_pct: float = 0.004,
     max_levels: int = 5
 ) -> Dict[str, List[Dict]]:
     """
@@ -139,7 +139,7 @@ def compute_sr_levels(
 def get_nearest_sr(
     price: float,
     sr_levels: Dict[str, List[Dict]],
-    max_search_pct: float = 0.03
+    max_search_pct: float = 0.015
 ) -> Optional[Dict]:
     """
     Find nearest support OR resistance within max_search_pct of price.
