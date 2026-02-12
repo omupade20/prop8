@@ -128,7 +128,7 @@ def analyze_mtf(
     # Final Direction
     # ---------------------
 
-    if abs(score) < 0.4:
+    if abs(score) < 0.6:
         direction = "NEUTRAL"
     elif score > 0:
         direction = "BULLISH"
