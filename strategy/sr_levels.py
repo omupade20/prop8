@@ -70,7 +70,7 @@ def _cluster_levels(peaks: List[float], tol_pct: float = 0.004) -> List[Dict]:
 
 
 # -------------------------------------------------
-# Main SR Calculation (5m candles)
+# MAIN SR CALCULATION (5m candles)
 # -------------------------------------------------
 
 def compute_sr_levels_from_5m(
@@ -108,7 +108,38 @@ def compute_sr_levels_from_5m(
 
 
 # -------------------------------------------------
-# Nearest SR
+# BACKWARD COMPATIBILITY (OLD SYSTEM SUPPORT)
+# -------------------------------------------------
+
+def compute_sr_levels(
+    highs: List[float],
+    lows: List[float],
+    lookback: int = 120
+) -> Dict[str, List[Dict]]:
+    """
+    Compatibility wrapper so older modules don't break.
+    Converts highs/lows into pseudo candles.
+    """
+
+    if not highs or not lows:
+        return {"supports": [], "resistances": []}
+
+    highs = highs[-lookback:]
+    lows = lows[-lookback:]
+
+    candles = []
+
+    for h, l in zip(highs, lows):
+        candles.append({
+            "high": h,
+            "low": l
+        })
+
+    return compute_sr_levels_from_5m(candles)
+
+
+# -------------------------------------------------
+# NEAREST SR
 # -------------------------------------------------
 
 def get_nearest_sr(
@@ -158,7 +189,7 @@ def get_nearest_sr(
 
 
 # -------------------------------------------------
-# Location Score
+# LOCATION SCORE
 # -------------------------------------------------
 
 def sr_location_score(
@@ -181,14 +212,14 @@ def sr_location_score(
     strength = nearest_sr.get("strength", 1)
     strength_factor = min(1.5, 0.6 + 0.2 * strength)
 
-    sign = 0
     typ = nearest_sr["type"]
 
     if direction == "LONG":
         sign = 1 if typ == "support" else -1
-
-    if direction == "SHORT":
+    elif direction == "SHORT":
         sign = 1 if typ == "resistance" else -1
+    else:
+        sign = 0
 
     score = sign * closeness * strength_factor
 
