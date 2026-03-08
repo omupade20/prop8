@@ -128,7 +128,7 @@ def analyze_mtf(
     # Final Direction
     # ---------------------
 
-    if abs(score) < 0.6:
+    if abs(score) < 0.4:
         direction = "NEUTRAL"
     elif score > 0:
         direction = "BULLISH"
@@ -141,9 +141,9 @@ def analyze_mtf(
     # Confidence Buckets
     # ---------------------
 
-    if strength >= 1.4 and not conflict:
+    if strength >= 1.6 and not conflict:
         confidence = "HIGH"
-    elif strength >= 0.8:
+    elif strength >= 1.0:
         confidence = "MEDIUM"
     else:
         confidence = "LOW"
