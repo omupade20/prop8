@@ -14,7 +14,7 @@ class StrategyEngine:
     """
     PROFESSIONAL PULLBACK-BASED STRATEGY ENGINE
 
-    Strict Hierarchy:
+    New Hierarchy:
 
     MTF → Regime → HTF → VWAP → PULLBACK DETECTION → Decision Engine
     """
@@ -52,7 +52,6 @@ class StrategyEngine:
 
         bar = last_bar[0]
 
-        # Build MTF candles from 1m bars
         self.mtf_builder.update(
             inst_key,
             bar["time"],
@@ -76,19 +75,15 @@ class StrategyEngine:
             history_15m=hist_15m
         )
 
-        # HARD GATES ON MTF
+        # HARD GATE: need clear HTF direction
         if mtf_ctx.direction == "NEUTRAL":
             return None
 
         if mtf_ctx.conflict:
             return None
 
-        # Require at least MEDIUM confidence on higher timeframe
-        if mtf_ctx.confidence == "LOW":
-            return None
-
         # ==================================================
-        # 3️⃣ MARKET REGIME FILTER (STRICT)
+        # 3️⃣ MARKET REGIME FILTER
         # ==================================================
 
         regime = detect_market_regime(
@@ -97,8 +92,7 @@ class StrategyEngine:
             closes=closes
         )
 
-        # TRADE ONLY IN PROPER TRENDING MARKETS
-        if regime.state != "TRENDING":
+        if regime.state in ("WEAK", "COMPRESSION"):
             return None
 
         # ==================================================
@@ -110,16 +104,15 @@ class StrategyEngine:
 
         vwap_calc = self.vwap_calculators[inst_key]
 
-        # Update VWAP using completed bar data (cleaner than tick LTP)
         vwap_calc.update(
-            bar["close"],
-            bar["volume"]
+            ltp,
+            volumes[-1] if volumes else 0
         )
 
         vwap_ctx = vwap_calc.get_context(ltp)
 
         # ==================================================
-        # 5️⃣ HTF BIAS (EMA BASED)
+        # 5️⃣ HTF BIAS
         # ==================================================
 
         htf_bias = get_htf_bias(
@@ -127,7 +120,7 @@ class StrategyEngine:
             vwap_value=vwap_ctx.vwap
         )
 
-        # HTF must align with MTF direction
+        # HTF must align with MTF
         if mtf_ctx.direction == "BULLISH" and htf_bias.direction != "BULLISH":
             return None
 
@@ -135,17 +128,16 @@ class StrategyEngine:
             return None
 
         # ==================================================
-        # 6️⃣ PULLBACK DETECTION
+        # 6️⃣ PULLBACK DETECTION (CORE CHANGE)
         # ==================================================
 
-        # Use HTF bias as master directional input
         pullback = detect_pullback_signal(
             prices=prices,
             highs=highs,
             lows=lows,
             closes=closes,
             volumes=volumes,
-            htf_direction=htf_bias.direction
+            htf_direction=mtf_ctx.direction
         )
 
         if not pullback:
@@ -168,7 +160,7 @@ class StrategyEngine:
             pullback_signal=pullback
         )
 
-        # Attach debugging context for logging / dashboard
+        # Add debugging context
         decision.components["mtf_direction"] = mtf_ctx.direction
         decision.components["mtf_strength"] = mtf_ctx.strength
         decision.components["regime"] = regime.state
