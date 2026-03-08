@@ -1,7 +1,5 @@
-# strategy/htf_bias.py
-
 from dataclasses import dataclass
-from typing import Optional, List
+from typing import Optional, List, Dict
 from strategy.indicators import exponential_moving_average
 
 
@@ -10,40 +8,41 @@ from strategy.indicators import exponential_moving_average
 # ------------------------
 @dataclass
 class HTFBias:
-    direction: str     # BULLISH | BEARISH | NEUTRAL
-    strength: float    # 0 – 10
-    label: str         # BULLISH_STRONG, BULLISH_WEAK, etc.
+    direction: str
+    strength: float
+    label: str
     comment: str
 
 
 # ------------------------
-# HTF Bias Logic
+# HTF Bias Logic (5m candles)
 # ------------------------
 def get_htf_bias(
-    prices: List[float],
+    candles_5m: List[Dict],
     vwap_value: Optional[float] = None,
-    short_period: int = 34,
-    long_period: int = 89,
+    short_period: int = 21,
+    long_period: int = 55,
     vwap_tolerance: float = 0.006
 ) -> HTFBias:
     """
-    Compute an HTF directional bias (direction + confidence).
-    - Uses EMA short_period vs long_period (defaults 20 / 50).
-    - Strength is structural (normalized by recent range), scaled 0.5..10.
-    - Returns HTFBias(direction, strength, label, comment).
+    HTF bias computed using 5-minute candles.
 
-    Usage notes:
-    - This is a soft directional trust signal — do NOT treat as an absolute veto.
-    - Pass recent prices (1-minute or aggregated HTF prices). If using 1-minute data,
-      ensure the list length is >= long_period + 5 for reliable output.
+    candles_5m example element:
+    {
+        "time_start": "...",
+        "open": ...,
+        "high": ...,
+        "low": ...,
+        "close": ...
+    }
     """
 
-    # Safety: require some minimal data
-    min_required = long_period + 5
-    if not prices or len(prices) < min_required:
-        return HTFBias("NEUTRAL", 0.5, "NEUTRAL", "Insufficient HTF data")
+    if not candles_5m or len(candles_5m) < long_period + 5:
+        return HTFBias("NEUTRAL", 0.5, "NEUTRAL", "Insufficient 5m data")
 
-    # Compute EMAs (these functions may return None if not enough data)
+    # Extract close prices
+    prices = [c["close"] for c in candles_5m]
+
     ema_short = exponential_moving_average(prices, short_period)
     ema_long = exponential_moving_average(prices, long_period)
 
@@ -52,8 +51,11 @@ def get_htf_bias(
 
     price = prices[-1]
 
-    # 1) EMA Direction
+    # ------------------------
+    # Direction
+    # ------------------------
     ema_diff = ema_short - ema_long
+
     if ema_diff > 0:
         direction = "BULLISH"
     elif ema_diff < 0:
@@ -61,66 +63,87 @@ def get_htf_bias(
     else:
         return HTFBias("NEUTRAL", 1.0, "NEUTRAL", "Flat EMA")
 
-    # 2) Structural strength: normalize EMA separation by recent price movement (range)
-    lookback_for_range = min(20, len(prices))
-    recent_slice = prices[-lookback_for_range:]
-    recent_range = max(recent_slice) - min(recent_slice)
+    # ------------------------
+    # Strength (structure)
+    # ------------------------
+    lookback = min(20, len(prices))
+    recent = prices[-lookback:]
+
+    recent_range = max(recent) - min(recent)
+
     if recent_range <= 0:
         base_strength = 1.5
     else:
-        # scale so that reasonable separations give values in 0..6
         base_strength = min(abs(ema_diff) / recent_range * 10.0, 6.0)
 
     strength = base_strength
-    comment_parts = ["EMA alignment"]
+    comment = ["EMA alignment"]
 
-    # 3) Trend maturity (slope stability): check EMA separation some bars ago
-    # Use a safe previous window only if we have enough data
-    if len(prices) >= (long_period + 10):
-        try:
-            past_prices = prices[:-5]  # look a few bars back to test persistence
-            past_ema_short = exponential_moving_average(past_prices, short_period)
-            past_ema_long = exponential_moving_average(past_prices, long_period)
-            if past_ema_short is not None and past_ema_long is not None:
-                past_diff = past_ema_short - past_ema_long
-                # If past direction matches current direction, reward maturity
-                if (direction == "BULLISH" and past_diff > 0) or (direction == "BEARISH" and past_diff < 0):
-                    strength += 1.0
-                    comment_parts.append("EMA trend holding")
-        except Exception:
-            # don't fail HTF on computation errors
-            pass
+    # ------------------------
+    # Trend maturity
+    # ------------------------
+    if len(prices) >= long_period + 10:
 
-    # 4) VWAP context (soft)
-    if vwap_value is not None and vwap_value > 0:
+        past_prices = prices[:-5]
+
+        past_short = exponential_moving_average(past_prices, short_period)
+        past_long = exponential_moving_average(past_prices, long_period)
+
+        if past_short and past_long:
+
+            past_diff = past_short - past_long
+
+            if direction == "BULLISH" and past_diff > 0:
+                strength += 1.0
+                comment.append("Trend persistence")
+
+            if direction == "BEARISH" and past_diff < 0:
+                strength += 1.0
+                comment.append("Trend persistence")
+
+    # ------------------------
+    # VWAP influence
+    # ------------------------
+    if vwap_value:
+
         dist = (price - vwap_value) / vwap_value
-        # small nudges only — VWAP should not flip the HTF fully
+
         if direction == "BULLISH":
+
             if dist > vwap_tolerance:
                 strength += 1.0
-                comment_parts.append("Above VWAP")
+                comment.append("Above VWAP")
+
             elif dist < -vwap_tolerance:
                 strength -= 1.0
-                comment_parts.append("Below VWAP (counter pressure)")
-            else:
-                comment_parts.append("Near VWAP")
-        else:  # BEARISH
+                comment.append("Below VWAP pressure")
+
+        else:
+
             if dist < -vwap_tolerance:
                 strength += 1.0
-                comment_parts.append("Below VWAP")
+                comment.append("Below VWAP")
+
             elif dist > vwap_tolerance:
                 strength -= 1.0
-                comment_parts.append("Above VWAP (counter pressure)")
-            else:
-                comment_parts.append("Near VWAP")
+                comment.append("Above VWAP pressure")
 
-    # 5) final clamp & label
-    # keep within [0.5, 10.0] — avoid zero so downstream logic has room to interpret
+    # ------------------------
+    # Clamp strength
+    # ------------------------
     strength = max(0.5, min(round(strength, 2), 10.0))
 
+    # ------------------------
+    # Label
+    # ------------------------
     if direction == "BULLISH":
-        label = "BULLISH_STRONG" if strength >= 7.0 else "BULLISH_WEAK"
+        label = "BULLISH_STRONG" if strength >= 7 else "BULLISH_WEAK"
     else:
-        label = "BEARISH_STRONG" if strength >= 7.0 else "BEARISH_WEAK"
+        label = "BEARISH_STRONG" if strength >= 7 else "BEARISH_WEAK"
 
-    return HTFBias(direction=direction, strength=strength, label=label, comment=" | ".join(comment_parts))
+    return HTFBias(
+        direction=direction,
+        strength=strength,
+        label=label,
+        comment=" | ".join(comment)
+    )
