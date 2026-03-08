@@ -142,7 +142,7 @@ def detect_market_regime(
     # =====================
 
     # EARLY TREND
-    if adx >= 18 and recent_range > prev_range * 1.5:
+    if adx >= 18 and recent_range > prev_range * 1.3:
         strength = cap(4.5 + (adx - 18) * 0.2)
         return MarketRegime(
             state="EARLY_TREND",
