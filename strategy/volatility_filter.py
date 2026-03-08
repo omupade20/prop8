@@ -111,7 +111,7 @@ def analyze_volatility(
     # ----------------------
     # 3️⃣ Healthy Expansion
     # ----------------------
-    if move_pct_atr < 1.6:
+    if move_pct_atr < 1.8:
         score = 1.1
         comment = "healthy_expansion"
 
