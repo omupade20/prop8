@@ -1,105 +1,195 @@
-from dataclasses import dataclass
-from typing import Optional, List, Dict
-from strategy.indicators import exponential_moving_average
+from typing import List, Dict, Optional, Tuple
+from statistics import mean
 
 
-@dataclass
-class HTFBias:
-    direction: str
-    strength: float
-    label: str
-    comment: str
+# -------------------------------------------------
+# Helpers
+# -------------------------------------------------
+
+def _find_local_extrema(values: List[float], window: int = 5) -> Tuple[List[Tuple[int, float]], List[Tuple[int, float]]]:
+
+    n = len(values)
+    maxima, minima = [], []
+
+    if n < window * 2 + 1:
+        return maxima, minima
+
+    half = window // 2
+
+    for i in range(half, n - half):
+
+        center = values[i]
+        left = values[i - half:i]
+        right = values[i + 1:i + 1 + half]
+
+        if all(center > x for x in left + right):
+            maxima.append((i, center))
+
+        if all(center < x for x in left + right):
+            minima.append((i, center))
+
+    return maxima, minima
 
 
-def get_htf_bias(
-    candles_5m: List[Dict],
-    vwap_value: Optional[float] = None,
-    short_period: int = 8,
-    long_period: int = 21,
-    vwap_tolerance: float = 0.006
-) -> HTFBias:
+def _cluster_levels(peaks: List[float], tol_pct: float = 0.004) -> List[Dict]:
 
-    if not candles_5m or len(candles_5m) < long_period + 5:
-        return HTFBias("NEUTRAL", 0.5, "NEUTRAL", "Insufficient 5m data")
+    if not peaks:
+        return []
 
-    prices = [c["close"] for c in candles_5m]
+    sorted_peaks = sorted(peaks)
 
-    ema_short = exponential_moving_average(prices, short_period)
-    ema_long = exponential_moving_average(prices, long_period)
+    clusters = []
+    cluster = [sorted_peaks[0]]
 
-    if ema_short is None or ema_long is None:
-        return HTFBias("NEUTRAL", 0.5, "NEUTRAL", "EMA unavailable")
+    for p in sorted_peaks[1:]:
 
-    price = prices[-1]
+        avg = sum(cluster) / len(cluster)
+        tol = avg * tol_pct
 
-    ema_diff = ema_short - ema_long
-
-    if ema_diff > 0:
-        direction = "BULLISH"
-    elif ema_diff < 0:
-        direction = "BEARISH"
-    else:
-        return HTFBias("NEUTRAL", 1.0, "NEUTRAL", "Flat EMA")
-
-    lookback = min(20, len(prices))
-    recent = prices[-lookback:]
-    recent_range = max(recent) - min(recent)
-
-    if recent_range <= 0:
-        strength = 1.5
-    else:
-        strength = min(abs(ema_diff) / recent_range * 10.0, 6.0)
-
-    comment = ["EMA alignment"]
-
-    if len(prices) >= long_period + 10:
-
-        past_prices = prices[:-5]
-
-        past_short = exponential_moving_average(past_prices, short_period)
-        past_long = exponential_moving_average(past_prices, long_period)
-
-        if past_short and past_long:
-
-            past_diff = past_short - past_long
-
-            if direction == "BULLISH" and past_diff > 0:
-                strength += 1.0
-                comment.append("Trend persistence")
-
-            if direction == "BEARISH" and past_diff < 0:
-                strength += 1.0
-                comment.append("Trend persistence")
-
-    if vwap_value is not None and vwap_value > 0:
-
-        dist = (price - vwap_value) / vwap_value
-
-        if direction == "BULLISH":
-
-            if dist > vwap_tolerance:
-                strength += 1.0
-                comment.append("Above VWAP")
-
-            elif dist < -vwap_tolerance:
-                strength -= 1.0
-                comment.append("Below VWAP pressure")
-
+        if abs(p - avg) <= tol:
+            cluster.append(p)
         else:
+            clusters.append(cluster)
+            cluster = [p]
 
-            if dist < -vwap_tolerance:
-                strength += 1.0
-                comment.append("Below VWAP")
+    clusters.append(cluster)
 
-            elif dist > vwap_tolerance:
-                strength -= 1.0
-                comment.append("Above VWAP pressure")
+    out = []
 
-    strength = max(0.5, min(round(strength, 2), 10.0))
+    for c in clusters:
 
-    if direction == "BULLISH":
-        label = "BULLISH_STRONG" if strength >= 7 else "BULLISH_WEAK"
-    else:
-        label = "BEARISH_STRONG" if strength >= 7 else "BEARISH_WEAK"
+        lvl = mean(c)
 
-    return HTFBias(direction, strength, label, " | ".join(comment))
+        out.append({
+            "level": round(lvl, 6),
+            "count": len(c),
+            "strength": min(len(c), 4)
+        })
+
+    return out
+
+
+# -------------------------------------------------
+# Main SR Calculation (5m candles)
+# -------------------------------------------------
+
+def compute_sr_levels_from_5m(
+    candles_5m: List[Dict],
+    lookback: int = 120,
+    extrema_window: int = 5,
+    cluster_tol_pct: float = 0.004,
+    max_levels: int = 3
+) -> Dict[str, List[Dict]]:
+
+    if not candles_5m:
+        return {"supports": [], "resistances": []}
+
+    candles = candles_5m[-lookback:]
+
+    highs = [c["high"] for c in candles]
+    lows = [c["low"] for c in candles]
+
+    max_extrema, _ = _find_local_extrema(highs, window=extrema_window)
+    _, min_extrema = _find_local_extrema(lows, window=extrema_window)
+
+    resistances = [val for _, val in max_extrema]
+    supports = [val for _, val in min_extrema]
+
+    resist_clusters = _cluster_levels(resistances, tol_pct=cluster_tol_pct)
+    supp_clusters = _cluster_levels(supports, tol_pct=cluster_tol_pct)
+
+    supp_sorted = sorted(supp_clusters, key=lambda x: x["level"])[:max_levels]
+    res_sorted = sorted(resist_clusters, key=lambda x: x["level"], reverse=True)[:max_levels]
+
+    return {
+        "supports": supp_sorted,
+        "resistances": res_sorted
+    }
+
+
+# -------------------------------------------------
+# Nearest SR
+# -------------------------------------------------
+
+def get_nearest_sr(
+    price: float,
+    sr_levels: Dict[str, List[Dict]],
+    max_search_pct: float = 0.03
+) -> Optional[Dict]:
+
+    supports = sr_levels.get("supports", [])
+    resistances = sr_levels.get("resistances", [])
+
+    best = None
+    best_dist = float("inf")
+
+    for s in supports:
+
+        lvl = s["level"]
+        dist = abs(price - lvl) / max(lvl, 1e-9)
+
+        if dist < best_dist:
+            best_dist = dist
+            best = {
+                "type": "support",
+                "level": lvl,
+                "dist_pct": dist,
+                "strength": s.get("strength", 1)
+            }
+
+    for r in resistances:
+
+        lvl = r["level"]
+        dist = abs(lvl - price) / max(price, 1e-9)
+
+        if dist < best_dist:
+            best_dist = dist
+            best = {
+                "type": "resistance",
+                "level": lvl,
+                "dist_pct": dist,
+                "strength": r.get("strength", 1)
+            }
+
+    if best and best["dist_pct"] <= max_search_pct:
+        return best
+
+    return None
+
+
+# -------------------------------------------------
+# Location Score
+# -------------------------------------------------
+
+def sr_location_score(
+    price: float,
+    nearest_sr: Optional[Dict],
+    direction: str,
+    proximity_threshold: float = 0.02
+) -> float:
+
+    if nearest_sr is None:
+        return 0.0
+
+    dist = nearest_sr.get("dist_pct")
+
+    if dist is None or dist > proximity_threshold:
+        return 0.0
+
+    closeness = (proximity_threshold - dist) / proximity_threshold
+
+    strength = nearest_sr.get("strength", 1)
+    strength_factor = min(1.5, 0.6 + 0.2 * strength)
+
+    sign = 0
+    typ = nearest_sr["type"]
+
+    if direction == "LONG":
+        sign = 1 if typ == "support" else -1
+
+    if direction == "SHORT":
+        sign = 1 if typ == "resistance" else -1
+
+    score = sign * closeness * strength_factor
+
+    return round(max(min(score, 1.0), -1.0), 3)
