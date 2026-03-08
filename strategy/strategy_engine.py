@@ -1,5 +1,3 @@
-# strategy/strategy_engine.py
-
 from strategy.market_regime import detect_market_regime
 from strategy.htf_bias import get_htf_bias
 from strategy.pullback_detector import detect_pullback_signal
@@ -14,9 +12,9 @@ class StrategyEngine:
     """
     PROFESSIONAL PULLBACK-BASED STRATEGY ENGINE
 
-    New Hierarchy:
+    Hierarchy:
 
-    MTF → Regime → HTF → VWAP → PULLBACK DETECTION → Decision Engine
+    MTF → Regime → VWAP → HTF → Pullback → Decision Engine
     """
 
     def __init__(self, scanner, vwap_calculators):
@@ -30,7 +28,7 @@ class StrategyEngine:
         # 1️⃣ DATA SUFFICIENCY
         # ==================================================
 
-        if not self.scanner.has_enough_data(inst_key, min_bars=40):
+        if not self.scanner.has_enough_data(inst_key, min_bars=25):
             return None
 
         prices = self.scanner.get_prices(inst_key)
@@ -52,6 +50,7 @@ class StrategyEngine:
 
         bar = last_bar[0]
 
+        # Update MTF builder
         self.mtf_builder.update(
             inst_key,
             bar["time"],
@@ -63,7 +62,7 @@ class StrategyEngine:
         )
 
         candle_5m = self.mtf_builder.get_latest_5m(inst_key)
-        hist_5m = self.mtf_builder.get_tf_history(inst_key, minutes=5, lookback=3)
+        hist_5m_small = self.mtf_builder.get_tf_history(inst_key, minutes=5, lookback=3)
 
         candle_15m = self.mtf_builder.get_latest_15m(inst_key)
         hist_15m = self.mtf_builder.get_tf_history(inst_key, minutes=15, lookback=3)
@@ -71,11 +70,10 @@ class StrategyEngine:
         mtf_ctx = analyze_mtf(
             candle_5m,
             candle_15m,
-            history_5m=hist_5m,
+            history_5m=hist_5m_small,
             history_15m=hist_15m
         )
 
-        # HARD GATE: need clear HTF direction
         if mtf_ctx.direction == "NEUTRAL":
             return None
 
@@ -83,7 +81,7 @@ class StrategyEngine:
             return None
 
         # ==================================================
-        # 3️⃣ MARKET REGIME FILTER
+        # 3️⃣ MARKET REGIME
         # ==================================================
 
         regime = detect_market_regime(
@@ -112,15 +110,19 @@ class StrategyEngine:
         vwap_ctx = vwap_calc.get_context(ltp)
 
         # ==================================================
-        # 5️⃣ HTF BIAS
+        # 5️⃣ HTF BIAS (5m candles)
         # ==================================================
 
+        hist_5m = self.mtf_builder.get_tf_history(inst_key, minutes=5, lookback=120)
+
+        if not hist_5m or len(hist_5m) < 60:
+            return None
+
         htf_bias = get_htf_bias(
-            prices=prices,
+            candles_5m=hist_5m,
             vwap_value=vwap_ctx.vwap
         )
 
-        # HTF must align with MTF
         if mtf_ctx.direction == "BULLISH" and htf_bias.direction != "BULLISH":
             return None
 
@@ -128,13 +130,16 @@ class StrategyEngine:
             return None
 
         # ==================================================
-        # 6️⃣ PULLBACK DETECTION (CORE CHANGE)
+        # 6️⃣ PULLBACK DETECTION
         # ==================================================
+
+        highs_5m = [c["high"] for c in hist_5m]
+        lows_5m = [c["low"] for c in hist_5m]
 
         pullback = detect_pullback_signal(
             prices=prices,
-            highs=highs,
-            lows=lows,
+            highs=highs_5m,
+            lows=lows_5m,
             closes=closes,
             volumes=volumes,
             htf_direction=mtf_ctx.direction
@@ -160,7 +165,7 @@ class StrategyEngine:
             pullback_signal=pullback
         )
 
-        # Add debugging context
+        # Debug information
         decision.components["mtf_direction"] = mtf_ctx.direction
         decision.components["mtf_strength"] = mtf_ctx.strength
         decision.components["regime"] = regime.state
