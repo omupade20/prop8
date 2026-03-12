@@ -184,7 +184,7 @@ def final_trade_decision(
         state = f"EXECUTE_{direction}"
         reason = "high quality pullback trade"
 
-    elif score >= 6:
+    elif score >= 6.0:
         state = f"PREPARE_{direction}"
         reason = "developing pullback setup"
 
