@@ -40,9 +40,9 @@ def breakout_signal(
     high_prices: Optional[list[float]] = None,
     low_prices: Optional[list[float]] = None,
     close_prices: Optional[list[float]] = None,
-    breakout_pct: float = 0.0015,
-    vol_threshold: float = 1.2,
-    atr_multiplier: float = 0.8
+    breakout_pct: float = 0.0020,
+    vol_threshold: float = 1.3,
+    atr_multiplier: float = 0.9
 ) -> Optional[Dict]:
 
     if len(prices) < 30:
