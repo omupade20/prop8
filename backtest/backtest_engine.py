@@ -20,6 +20,10 @@ CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 UNIVERSE = [
+    {"symbol": "DIXON", "key": "NSE_EQ|INE935N01020", "sector": "TECH_MFG"},
+    {"symbol": "TRENT", "key": "NSE_EQ|INE849A01020", "sector": "RETAIL"},
+    {"symbol": "HAL", "key": "NSE_EQ|INE066F01012", "sector": "DEFENSE"},
+    {"symbol": "BSE", "key": "NSE_EQ|INE118H01025", "sector": "EXCHANGE"},
     {"symbol": "RELIANCE", "key": "NSE_EQ|INE002A01018", "sector": "ENERGY"},
     {"symbol": "HDFCBANK", "key": "NSE_EQ|INE040A01034", "sector": "BANKING"},
     {"symbol": "ICICIBANK", "key": "NSE_EQ|INE090A01021", "sector": "BANKING"},
@@ -293,13 +297,13 @@ def run_6month_simulation(
                     if bar_l <= pos.current_sl:
                         pos.exit_price = pos.current_sl
                         pos.exit_time = f"{current_day} {t_now}"
-                        pos.exit_reason = "BREAKEVEN_STOP" if pos.breakeven_locked else ("PROFIT_LOCK_STOP" if pos.profit_locked else "STOP_LOSS")
+                        pos.exit_reason = "BREAKEVEN_STOP" if pos.breakeven_locked else ("TRAIL_STOP" if pos.profit_locked else "STOP_LOSS")
                         pos.is_closed = True
                         day_trades.append(pos)
                         del active_positions[sym]
                         continue
 
-                    # 2. Target Check
+                    # 2. Target Check (5.0% or runner)
                     if bar_h >= pos.target:
                         pos.exit_price = pos.target
                         pos.exit_time = f"{current_day} {t_now}"
@@ -309,25 +313,26 @@ def run_6month_simulation(
                         del active_positions[sym]
                         continue
 
-                    # 3. Never-Red Breakeven Guard (+1.0R touch)
-                    gain_pts = bar_h - pos.entry_price
-                    if not pos.breakeven_locked and gain_pts >= pos.r_dist:
-                        # Move SL to Entry + complete Indian statutory taxes buffer (approx Rs. 70 round-trip)
-                        buffer = 70.0 / pos.qty if pos.qty > 0 else 0.50
+                    # 3. Never-Red Breakeven Guard (+0.8% touch)
+                    gain_pct = (bar_h - pos.entry_price) / pos.entry_price
+                    if not pos.breakeven_locked and gain_pct >= 0.0080:
+                        buffer = 75.0 / pos.qty if pos.qty > 0 else 0.50
                         pos.current_sl = round(pos.entry_price + buffer, 2)
                         pos.breakeven_locked = True
 
-                    # 4. +1.5R Trailing Profit Lock
-                    if not pos.profit_locked and gain_pts >= (1.5 * pos.r_dist):
-                        pos.current_sl = round(pos.entry_price + (0.6 * pos.r_dist), 2)
-                        pos.profit_locked = True
+                    # 4. Wide Trailing Stop (1.5% below highest peak once breakeven is locked)
+                    if pos.breakeven_locked:
+                        trail_px = round(pos.highest_price * (1.0 - 0.015), 2)
+                        if trail_px > pos.current_sl:
+                            pos.current_sl = trail_px
+                            pos.profit_locked = True
 
                 elif pos.side == "SELL":
                     # 1. Stop Loss Check
                     if bar_h >= pos.current_sl:
                         pos.exit_price = pos.current_sl
                         pos.exit_time = f"{current_day} {t_now}"
-                        pos.exit_reason = "BREAKEVEN_STOP" if pos.breakeven_locked else ("PROFIT_LOCK_STOP" if pos.profit_locked else "STOP_LOSS")
+                        pos.exit_reason = "BREAKEVEN_STOP" if pos.breakeven_locked else ("TRAIL_STOP" if pos.profit_locked else "STOP_LOSS")
                         pos.is_closed = True
                         day_trades.append(pos)
                         del active_positions[sym]
@@ -343,17 +348,19 @@ def run_6month_simulation(
                         del active_positions[sym]
                         continue
 
-                    # 3. Never-Red Breakeven Guard (+1.0R touch)
-                    gain_pts = pos.entry_price - bar_l
-                    if not pos.breakeven_locked and gain_pts >= pos.r_dist:
-                        buffer = 70.0 / pos.qty if pos.qty > 0 else 0.50
+                    # 3. Never-Red Breakeven Guard (+0.8% touch)
+                    gain_pct = (pos.entry_price - bar_l) / pos.entry_price
+                    if not pos.breakeven_locked and gain_pct >= 0.0080:
+                        buffer = 75.0 / pos.qty if pos.qty > 0 else 0.50
                         pos.current_sl = round(pos.entry_price - buffer, 2)
                         pos.breakeven_locked = True
 
-                    # 4. +1.5R Trailing Profit Lock
-                    if not pos.profit_locked and gain_pts >= (1.5 * pos.r_dist):
-                        pos.current_sl = round(pos.entry_price - (0.6 * pos.r_dist), 2)
-                        pos.profit_locked = True
+                    # 4. Wide Trailing Stop (1.5% above lowest trough once breakeven is locked)
+                    if pos.breakeven_locked:
+                        trail_px = round(pos.lowest_price * (1.0 + 0.015), 2)
+                        if trail_px < pos.current_sl:
+                            pos.current_sl = trail_px
+                            pos.profit_locked = True
 
             # 4. Check for New Trade Entries (Between 09:20 and 14:15)
             # Institutional selectivity: Max 1 elite trade per day, max 1 concurrent
@@ -408,79 +415,39 @@ def run_6month_simulation(
                             trs.append(tr)
                         atr = sum(trs) / len(trs) if trs else (close_p * 0.005)
 
-                        # Volume Surge Filter: 20-bar average volume (Institutional volume surge >= 2.0x)
-                        recent_vols = [b["volume"] for b in st["bars"][-21:-1]]
-                        avg_vol = sum(recent_vols) / len(recent_vols) if recent_vols else 1.0
-                        has_volume_surge = c_now["volume"] >= (2.0 * avg_vol)
+                        # Diamond Strategy Volume Filter: 15-minute average volume (Institutional surge >= 4.0x)
+                        vol15_avg = st["cum_vol"] / len(st["bars"]) if st["bars"] else 1.0
+                        has_volume_surge = c_now["volume"] >= (4.0 * vol15_avg)
 
-                        # Trend Filter: 20-bar and 50-bar EMA approximation
-                        recent_closes_20 = [b["close"] for b in st["bars"][-20:]]
-                        recent_closes_50 = [b["close"] for b in st["bars"][-50:]]
-                        ema20 = sum(recent_closes_20) / len(recent_closes_20) if recent_closes_20 else close_p
-                        ema50 = sum(recent_closes_50) / len(recent_closes_50) if recent_closes_50 else close_p
+                        # Check 15m candle structure (avoiding indecision dojis)
+                        c15_open = st["bars"][0]["open"]
+                        c15_close = st["bars"][min(14, len(st["bars"])-1)]["close"]
+                        body_size = abs(c15_close - c15_open)
+                        full_range = st["high_15m"] - st["low_15m"]
+                        has_conviction_body = full_range > 0 and (body_size / full_range) >= 0.35
 
                         # Detect Signals
                         signal_side = None
                         strategy_name = ""
-                        conviction = 0.75
+                        conviction = 0.90
 
-                        # Strategy A: 15-Min ORB Breakout (from 09:30 to 11:15) - Requires 2x Volume Surge & Triple Alignment
-                        if "09:30:00" <= t_now <= "11:15:00" and st["high_15m"] > 0:
-                            if close_p > st["high_15m"] and close_p > vwap_val and close_p > ema20 > ema50 and has_volume_surge and idx_trend == "BULLISH":
+                        # Diamond Setup: High-Beta 15m Breakout with 4x Volume Surge & Nifty Alignment
+                        if sym in ["DIXON", "TRENT", "HAL", "BSE"] and "09:30:00" <= t_now <= "11:15:00" and st["high_15m"] > 0 and has_conviction_body:
+                            if close_p > st["high_15m"] and has_volume_surge and idx_trend == "BULLISH":
                                 signal_side = "BUY"
-                                strategy_name = "15M_ORB_BREAKOUT"
-                                conviction = 0.90
-                            elif close_p < st["low_15m"] and close_p < vwap_val and close_p < ema20 < ema50 and has_volume_surge and idx_trend == "BEARISH":
+                                strategy_name = "DIAMOND_15M_BREAKOUT"
+                            elif close_p < st["low_15m"] and has_volume_surge and idx_trend == "BEARISH":
                                 signal_side = "SELL"
-                                strategy_name = "15M_ORB_BREAKDOWN"
-                                conviction = 0.90
-
-                        # Strategy B: VWAP First Kiss / Pullback Retest (10:00 to 13:30) - Trend Following Pullback
-                        if not signal_side and "10:00:00" <= t_now <= "13:30:00":
-                            if close_p > vwap_val and close_p > ema50 and c_now["low"] <= (vwap_val * 1.0010) and (c_now["close"] - c_now["low"]) > (c_now["high"] - c_now["close"]):
-                                if idx_trend == "BULLISH":
-                                    signal_side = "BUY"
-                                    strategy_name = "VWAP_PULLBACK_RETEST"
-                                    conviction = 0.82
-                            elif close_p < vwap_val and close_p < ema50 and c_now["high"] >= (vwap_val * 0.9990) and (c_now["high"] - c_now["close"]) > (c_now["close"] - c_now["low"]):
-                                if idx_trend == "BEARISH":
-                                    signal_side = "SELL"
-                                    strategy_name = "VWAP_PULLBACK_RETEST"
-                                    conviction = 0.82
-
-                        # Strategy C: Turtle Soup Stop-Hunt Hunter (Reversal on Liquidity Sweeps)
-                        if not signal_side and len(st["bars"]) >= 45:
-                            prior_high = max([b["high"] for b in st["bars"][:-3]])
-                            prior_low = min([b["low"] for b in st["bars"][:-3]])
-                            
-                            if c_now["high"] > prior_high and (c_now["high"] - prior_high) / prior_high <= 0.0030 and close_p < prior_high and close_p < vwap_val:
-                                signal_side = "SELL"
-                                strategy_name = "TURTLE_SOUP_FADE"
-                                conviction = 0.86
-                            elif c_now["low"] < prior_low and (prior_low - c_now["low"]) / prior_low <= 0.0030 and close_p > prior_low and close_p > vwap_val:
-                                signal_side = "BUY"
-                                strategy_name = "TURTLE_SOUP_FADE"
-                                conviction = 0.86
+                                strategy_name = "DIAMOND_15M_BREAKDOWN"
 
                         if signal_side:
-                            # Apply Kelly Conviction Sizing
-                            if conviction >= 0.85:
-                                mult = 1.40
-                                grade_label = "GRADE_A+ (High Conviction)"
-                            elif conviction >= 0.75:
-                                mult = 1.00
-                                grade_label = "GRADE_A (Standard)"
-                            else:
-                                mult = 0.65
-                                grade_label = "GRADE_B (Defensive)"
-
-                            effective_cap = base_capital * mult
+                            effective_cap = base_capital
                             buying_power = effective_cap * (leverage_multiplier if use_mis_leverage else 1.0)
                             qty = max(1, math.floor(buying_power / close_p))
 
-                            # Calibrated Institutional Sizing: 1.0x ATR SL (noise immunity) vs 1.8x ATR Target (achievable expansion)
-                            sl_dist = max(atr * 1.00, close_p * 0.0050)
-                            tgt_dist = max(atr * 1.80, close_p * 0.0125)
+                            # Diamond Sizing: 1.2% SL vs 5.0% Target (Runner to 15:15)
+                            sl_dist = close_p * 0.012
+                            tgt_dist = close_p * 0.050
 
                             if signal_side == "BUY":
                                 entry_sl = round(close_p - sl_dist, 2)
@@ -489,12 +456,7 @@ def run_6month_simulation(
                                 entry_sl = round(close_p + sl_dist, 2)
                                 entry_tgt = round(close_p - tgt_dist, 2)
 
-                            # Validate Minimum 4x Reward-to-Tax Ratio
-                            gross_est = abs(entry_tgt - close_p) * qty
-                            tax_est = calculate_statutory_taxes(close_p * qty, entry_tgt * qty)["total"]
-                            if gross_est < (tax_est * 3.8):
-                                continue
-
+                            grade_label = "DIAMOND_SNIPER (A+)"
                             # Open Trade
                             new_trade = Trade(
                                 symbol=sym,

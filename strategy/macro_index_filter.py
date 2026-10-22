@@ -8,7 +8,7 @@ Ensures individual stock trades align with the broader market tide:
 """
 
 from dataclasses import dataclass
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 from strategy.indicators import exponential_moving_average
 
 
