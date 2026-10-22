@@ -68,7 +68,28 @@ def main():
         ret = (s["net"] / 10000.0) * 100.0
         print(f"{m:<10} | {s['trades']:<7} | {wr:>7.1f}% | Rs. {s['gross']:>9.2f} | Rs. {s['taxes']:>8.2f} | Rs. {s['net']:>11.2f} | {ret:>+8.1f}%")
 
+    # Stock-by-stock Breakdown
+    stock_data = {}
+    for t in trades:
+        s_stats = stock_data.setdefault(t.symbol, {"trades": 0, "wins": 0, "gross": 0.0, "taxes": 0.0, "net": 0.0})
+        s_stats["trades"] += 1
+        if t.net_pnl > 0:
+            s_stats["wins"] += 1
+        s_stats["gross"] += t.gross_pnl
+        s_stats["taxes"] += t.taxes
+        s_stats["net"] += t.net_pnl
+
+    print("\n" + "="*80)
+    print("               CONSTITUENT STOCK BREAKDOWN (NIFTY 100 LEADERS)               ")
     print("="*80)
+    print(f"{'Symbol':<12} | {'Trades':<7} | {'Win Rate':<9} | {'Gross PnL':<12} | {'Taxes':<10} | {'Net Take-Home':<14}")
+    print("-"*80)
+    for sym in sorted(stock_data.keys(), key=lambda x: stock_data[x]["net"], reverse=True):
+        s = stock_data[sym]
+        wr = (s["wins"] / s["trades"] * 100.0) if s["trades"] > 0 else 0.0
+        print(f"{sym:<12} | {s['trades']:<7} | {wr:>7.1f}% | Rs. {s['gross']:>9.2f} | Rs. {s['taxes']:>7.2f} | Rs. {s['net']:>11.2f}")
+
+    print("\n" + "="*80)
     print("                 6-MONTH MASTER QUANTITATIVE SUMMARY                        ")
     print("="*80)
     print(f"• Initial Cash Capital:       Rs. {results['base_capital']:,.2f}")

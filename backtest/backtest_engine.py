@@ -20,18 +20,12 @@ CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 UNIVERSE = [
-    {"symbol": "DIXON", "key": "NSE_EQ|INE935N01020", "sector": "TECH_MFG"},
     {"symbol": "TRENT", "key": "NSE_EQ|INE849A01020", "sector": "RETAIL"},
-    {"symbol": "HAL", "key": "NSE_EQ|INE066F01012", "sector": "DEFENSE"},
+    {"symbol": "SHRIRAMFIN", "key": "NSE_EQ|INE721A01047", "sector": "FINANCE"},
+    {"symbol": "HAL", "key": "NSE_EQ|INE066F01020", "sector": "DEFENSE"},
+    {"symbol": "HINDALCO", "key": "NSE_EQ|INE038A01020", "sector": "METALS"},
     {"symbol": "BSE", "key": "NSE_EQ|INE118H01025", "sector": "EXCHANGE"},
-    {"symbol": "RELIANCE", "key": "NSE_EQ|INE002A01018", "sector": "ENERGY"},
-    {"symbol": "HDFCBANK", "key": "NSE_EQ|INE040A01034", "sector": "BANKING"},
-    {"symbol": "ICICIBANK", "key": "NSE_EQ|INE090A01021", "sector": "BANKING"},
-    {"symbol": "TCS", "key": "NSE_EQ|INE467B01029", "sector": "IT"},
-    {"symbol": "INFY", "key": "NSE_EQ|INE009A01021", "sector": "IT"},
-    {"symbol": "SBIN", "key": "NSE_EQ|INE062A01020", "sector": "BANKING"},
-    {"symbol": "LT", "key": "NSE_EQ|INE018A01030", "sector": "INFRA"},
-    {"symbol": "BHARTIARTL", "key": "NSE_EQ|INE397D01024", "sector": "TELECOM"},
+    {"symbol": "VEDL", "key": "NSE_EQ|INE205A01025", "sector": "METALS"},
     {"symbol": "TATASTEEL", "key": "NSE_EQ|INE081A01020", "sector": "METALS"}
 ]
 
@@ -432,7 +426,7 @@ def run_6month_simulation(
                         conviction = 0.90
 
                         # Diamond Setup: High-Beta 15m Breakout with 4x Volume Surge & Nifty Alignment
-                        if sym in ["DIXON", "TRENT", "HAL", "BSE"] and "09:30:00" <= t_now <= "11:15:00" and st["high_15m"] > 0 and has_conviction_body:
+                        if sym in [u["symbol"] for u in UNIVERSE] and "09:30:00" <= t_now <= "11:15:00" and st["high_15m"] > 0 and has_conviction_body:
                             if close_p > st["high_15m"] and has_volume_surge and idx_trend == "BULLISH":
                                 signal_side = "BUY"
                                 strategy_name = "DIAMOND_15M_BREAKOUT"
