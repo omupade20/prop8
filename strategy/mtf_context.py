@@ -145,9 +145,9 @@ def analyze_mtf(
     # Confidence Buckets
     # ---------------------
 
-    if strength >= 1.4 and not conflict:
+    if strength >= 1.6 and not conflict:
         confidence = "HIGH"
-    elif strength >= 0.8:
+    elif strength >= 1.0:
         confidence = "MEDIUM"
     else:
         confidence = "LOW"

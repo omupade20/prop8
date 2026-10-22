@@ -17,7 +17,7 @@ from typing import Optional, Dict, Any
 
 from strategy.market_regime import detect_market_regime
 from strategy.htf_bias import get_htf_bias
-from strategy.breakout_detector import breakout_signal
+from strategy.pullback_detector import detect_pullback_signal
 from strategy.decision_engine import final_trade_decision
 from strategy.market_depth_analyzer import analyze_market_depth
 from strategy.vwap_filter import VWAPCalculator
@@ -69,7 +69,7 @@ class StrategyEngine:
         # 1️⃣ DATA SUFFICIENCY
         # ==================================================
 
-        if not self.scanner.has_enough_data(inst_key, min_bars=30):
+        if not self.scanner.has_enough_data(inst_key, min_bars=25):
             return None
 
         prices = self.scanner.get_prices(inst_key)
@@ -106,6 +106,8 @@ class StrategyEngine:
             return None
 
         bar = last_bar[0]
+
+        # Update MTF builder
         self.mtf_builder.update(
             inst_key,
             bar["time"],
@@ -118,18 +120,18 @@ class StrategyEngine:
 
 
         candle_5m = self.mtf_builder.get_latest_5m(inst_key)
-        hist_5m = self.mtf_builder.get_tf_history(inst_key, minutes=5, lookback=3)
+        hist_5m_small = self.mtf_builder.get_tf_history(inst_key, minutes=5, lookback=3)
+
         candle_15m = self.mtf_builder.get_latest_15m(inst_key)
         hist_15m = self.mtf_builder.get_tf_history(inst_key, minutes=15, lookback=3)
 
         mtf_ctx = analyze_mtf(
             candle_5m,
             candle_15m,
-            history_5m=hist_5m,
+            history_5m=hist_5m_small,
             history_15m=hist_15m
         )
 
-        # 🔒 HARD MTF GATE
         if mtf_ctx.direction == "NEUTRAL":
             return None
 
@@ -137,10 +139,14 @@ class StrategyEngine:
             return None
 
         # ==================================================
-        # 3️⃣ MARKET REGIME FILTER
+        # 3️⃣ MARKET REGIME
         # ==================================================
 
-        regime = detect_market_regime(highs=highs, lows=lows, closes=closes)
+        regime = detect_market_regime(
+            highs=highs,
+            lows=lows,
+            closes=closes
+        )
 
         # Reject purely weak/choppy noise, but allow compression breakouts
         if regime.state == "WEAK":
@@ -154,17 +160,21 @@ class StrategyEngine:
             self.vwap_calculators[inst_key] = VWAPCalculator()
 
         vwap_calc = self.vwap_calculators[inst_key]
-        vwap_calc.update(ltp, volumes[-1] if volumes else 0)
+
+        vwap_calc.update(
+            ltp,
+            volumes[-1] if volumes else 0
+        )
+
         vwap_ctx = vwap_calc.get_context(ltp)
 
         # ==================================================
-        # 5️⃣ HTF BIAS (EMA STRUCTURE)
+        # 5️⃣ HTF BIAS (5m candles)
         # ==================================================
 
-        htf_bias = get_htf_bias(prices=prices, vwap_value=vwap_ctx.vwap)
+        hist_5m = self.mtf_builder.get_tf_history(inst_key, minutes=5, lookback=120)
 
-        # HTF must not oppose MTF
-        if mtf_ctx.direction == "BULLISH" and htf_bias.direction == "BEARISH":
+        if not hist_5m or len(hist_5m) < 60:
             return None
 
         if mtf_ctx.direction == "BEARISH" and htf_bias.direction == "BULLISH":
@@ -277,7 +287,7 @@ class StrategyEngine:
             closes=closes,
             volumes=volumes,
             market_regime=regime.state,
-            htf_bias_label=htf_bias.label,
+            htf_bias_direction=htf_bias.direction,
             vwap_ctx=vwap_ctx,
             breakout_signal=setup_signal,
             opens=opens

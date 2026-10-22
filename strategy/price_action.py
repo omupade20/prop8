@@ -240,3 +240,4 @@ def price_action_context(
     result["score"] = round(score, 3)
     result["comment"] = " | ".join(comments) if comments else "no_pa"
     return result
+    

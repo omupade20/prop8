@@ -47,10 +47,10 @@ def analyze_volume(
     else:
         rel = 1.0
 
-    if rel >= 1.6:
+    if rel >= 1.8:
         strength = "STRONG"
         score = 2.0
-    elif rel >= 1.25:
+    elif rel >= 1.4:
         strength = "MODERATE"
         score = 1.2
     elif rel >= 0.95:
