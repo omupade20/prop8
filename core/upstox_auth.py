@@ -132,8 +132,7 @@ def save_access_token_to_settings(new_token: str):
                 content = f.read()
 
             pattern = r'ACCESS_TOKEN\s*=\s*["\'].*?["\']'
-            replacement = f'ACCESS_TOKEN = "{new_token}"'
-            new_content = re.sub(pattern, replacement, content)
+            new_content = re.sub(pattern, f'ACCESS_TOKEN = "{new_token}"', content, count=1)
 
             with open(settings_path, "w", encoding="utf-8") as f:
                 f.write(new_content)
@@ -189,8 +188,8 @@ def ensure_valid_session() -> str:
     Pre-flight check:
     1. Tests current token in config.settings.
     2. If valid -> returns it immediately (takes <0.5s).
-    3. If expired -> runs automated fetch.
     """
+    from config.settings import ACCESS_TOKEN, API_BASE_URL
     token = os.environ.get("UPSTOX_ACCESS_TOKEN", "").strip().strip('"').strip("'") or ACCESS_TOKEN
 
     print("[AUTH] Performing Upstox Token Pre-Flight Health Check...")
