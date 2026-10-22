@@ -1,4 +1,6 @@
 # execution/execution_config.py
+import os
+
 """
 Execution & Risk Configuration.
 Edit CAPITAL_PER_TRADE directly to control the exact amount of money used per trade.
@@ -110,8 +112,8 @@ PAPER_TRADING = False
 # 📱 TELEGRAM INSTANT MOBILE NOTIFICATIONS
 # Get live trade pings, breakeven alerts, and EOD summaries on your phone at your day job.
 TELEGRAM_ENABLED = True
-TELEGRAM_BOT_TOKEN = "8923836777:AAGgMlM2kPeOrH1bwVbauepFxk7oKjsR_QM"
-TELEGRAM_CHAT_ID = "6215201988"
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8923836777:AAGgMlM2kPeOrH1bwVbauepFxk7oKjsR_QM")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "6215201988")
 
 # 📊 VISUAL REPORTING
 GENERATE_EOD_REPORT = True       # Automatically generates dark-mode HTML trade card at 15:15 IST

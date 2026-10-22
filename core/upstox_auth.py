@@ -191,22 +191,24 @@ def ensure_valid_session() -> str:
     2. If valid -> returns it immediately (takes <0.5s).
     3. If expired -> runs automated fetch.
     """
-    from config.settings import ACCESS_TOKEN, API_BASE_URL
+    token = os.environ.get("UPSTOX_ACCESS_TOKEN", "").strip().strip('"').strip("'") or ACCESS_TOKEN
 
     print("[AUTH] Performing Upstox Token Pre-Flight Health Check...")
-    is_valid, user_data = validate_token(ACCESS_TOKEN, API_BASE_URL)
+    is_valid, user_data = validate_token(token, API_BASE_URL)
 
     if is_valid and user_data:
         user_name = user_data.get("user_name", "Valued Client")
         user_id = user_data.get("user_id", "")
         email = user_data.get("email", "")
-        margin = get_account_margin(ACCESS_TOKEN, API_BASE_URL)
+        margin = get_account_margin(token, API_BASE_URL)
+        import config.settings
+        config.settings.ACCESS_TOKEN = token
         print("==========================================================================")
         print(f"  [UPSTOX AUTH SUCCESS] Verified Active Session")
         print(f"  Client: {user_name} ({user_id}) | Email: {email}")
         print(f"  Live Intraday Margin Available: Rs. {margin:,.2f}")
         print("==========================================================================")
-        return ACCESS_TOKEN
+        return token
 
     print("[AUTH WARNING] Current Upstox Access Token has expired or is invalid.")
 
@@ -218,13 +220,33 @@ def ensure_valid_session() -> str:
     if api_key and api_secret:
         new_token = capture_token_via_browser(api_key, api_secret, redirect_uri)
         if new_token:
+            import config.settings
+            config.settings.ACCESS_TOKEN = new_token
             return new_token
+
+    # Check if running in headless cloud environment (Render, Docker, or non-TTY)
+    is_cloud = os.environ.get("RENDER") or os.environ.get("PORT") or not sys.stdin.isatty()
+    if is_cloud:
+        print("\n[CLOUD AUTH ALERT] Headless execution detected on Render.")
+        print("[ACTION REQUIRED] Set 'UPSTOX_ACCESS_TOKEN' in Render Dashboard -> Environment Variables.")
+        try:
+            from core.telegram_notifier import get_telegram_notifier
+            get_telegram_notifier()._send_async(
+                "⚠️ *JARVIS UPSTOX AUTH REQUIRED*\n"
+                "Your daily Upstox token is missing or expired on Render.\n\n"
+                "👉 Open *Render Dashboard* -> *Environment* -> Update `UPSTOX_ACCESS_TOKEN`."
+            )
+        except Exception:
+            pass
+        return token
 
     print("\n[MANUAL TOKEN PROMPT] Please enter your fresh daily Upstox Access Token:")
     try:
         user_token = input("ACCESS_TOKEN > ").strip().strip('"').strip("'")
         if user_token:
             save_access_token_to_settings(user_token)
+            import config.settings
+            config.settings.ACCESS_TOKEN = user_token
             is_valid, user_data = validate_token(user_token, API_BASE_URL)
             if is_valid and user_data:
                 user_name = user_data.get("user_name", "Valued Client")
@@ -242,4 +264,5 @@ def ensure_valid_session() -> str:
     except Exception:
         pass
 
-    return ACCESS_TOKEN
+    return token
+
