@@ -132,7 +132,9 @@ LIMIT_BUFFER_PCT = 0.0003
 ORDER_TYPE = "LIMIT"             # Entry order type
 EXIT_ORDER_TYPE = "MARKET"        # Guaranteed exit type
 
-# Upstox V3 Full Feed Watchlist Limit (Multi-Socket Pool enables scanning all Nifty 500 stocks)
-MAX_WATCHLIST_SIZE = 500
+# Upstox V3 Full Feed Watchlist Limit:
+# Default to Top 100 high-liquidity stocks for 0.1 CPU cloud instances to guarantee 0-lag execution.
+# Can be increased up to 500 anytime via MAX_WATCHLIST_SIZE environment variable.
+MAX_WATCHLIST_SIZE = int(os.environ.get("MAX_WATCHLIST_SIZE", 100))
 USE_PORTFOLIO_STREAMER = True
 
