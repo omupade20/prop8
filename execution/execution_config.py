@@ -109,9 +109,9 @@ PAPER_TRADING = False
 
 # 📱 TELEGRAM INSTANT MOBILE NOTIFICATIONS
 # Get live trade pings, breakeven alerts, and EOD summaries on your phone at your day job.
-TELEGRAM_ENABLED = False         # Set to True once you provide token and chat_id below
-TELEGRAM_BOT_TOKEN = ""          # e.g., "123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ"
-TELEGRAM_CHAT_ID = ""            # e.g., "987654321"
+TELEGRAM_ENABLED = True
+TELEGRAM_BOT_TOKEN = "8923836777:AAGgMlM2kPeOrH1bwVbauepFxk7oKjsR_QM"
+TELEGRAM_CHAT_ID = "6215201988"
 
 # 📊 VISUAL REPORTING
 GENERATE_EOD_REPORT = True       # Automatically generates dark-mode HTML trade card at 15:15 IST
