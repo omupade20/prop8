@@ -83,9 +83,9 @@ USE_GTT_OCO = True
 # ==============================================================================
 # 🛑 DAILY CIRCUIT BREAKERS & ADAPTIVE SECTOR MEMORY
 # ==============================================================================
-# Reduced to 8 trades: Prioritizes elite quality over trade churn
-MAX_TRADES_PER_DAY = 8
-MAX_STOP_LOSSES = 4              # Shuts down engine after 4 SL hits
+# Sniper Selectivity: Capped at 2 elite trades per day to prevent tax bleeding
+MAX_TRADES_PER_DAY = 2
+MAX_STOP_LOSSES = 2              # Shuts down engine after 2 SL hits to protect capital
 MAX_TARGET_HITS = 5
 MAX_PARTIAL_EXITS = 4
 

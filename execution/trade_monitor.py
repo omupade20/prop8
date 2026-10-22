@@ -267,8 +267,9 @@ class TradeMonitor:
 
             # A. Touching +1.0R (or BREAKEVEN_MOVE_PCT): Instantly lock SL to Entry + Brokerage Buffer
             if not trade.is_never_red_locked and (r_mult >= 1.0 or profit_pct >= BREAKEVEN_MOVE_PCT):
-                buffer = round(20.0 / max(trade.qty, 1), 2)
-                buffer = min(buffer, trade.entry_price * 0.0005)  # Cap at 0.05%
+                # Full statutory coverage: Brokerage (Rs. 40) + STT + GST + Stamp Duty (approx Rs. 75 round-trip)
+                buffer = round(75.0 / max(trade.qty, 1), 2)
+                buffer = min(buffer, trade.entry_price * 0.0015)  # Cap at 0.15%
                 if trade.side == "BUY":
                     trade.stop_loss = round(trade.entry_price + buffer, 2)
                 else:
