@@ -117,7 +117,7 @@ def breakout_signal(
     signal = "POTENTIAL"
     confirmed = False
 
-    # 🔒 CHANGED: now require BOTH ATR and Volume
+    # [CRITICAL] Require BOTH ATR and Volume
     if atr_ok and volume_ok:
         signal = "CONFIRMED"
         confirmed = True

@@ -103,7 +103,7 @@ def analyze_volume(
     )
 
 
-# backward-compatible legacy boolean
+# backward-compatible volume spike confirmation
 def volume_spike_confirmed(
     volume_history,
     threshold_multiplier: float = 1.25,
@@ -111,7 +111,12 @@ def volume_spike_confirmed(
     rising_bars: int = 4
 ) -> bool:
     """
-    Legacy boolean volume confirmation.
+    Volume spike confirmation comparing current volume to average by threshold_multiplier.
     """
-    ctx = analyze_volume(volume_history, lookback=lookback, rising_bars=rising_bars)
-    return ctx.score > 0.5
+    if not volume_history or len(volume_history) < lookback:
+        return False
+    recent = volume_history[-lookback:]
+    avg_vol = sum(recent) / lookback if lookback > 0 else 0
+    if avg_vol <= 0:
+        return False
+    return (volume_history[-1] / avg_vol) >= threshold_multiplier

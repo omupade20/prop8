@@ -23,7 +23,7 @@ class LiquidityContext:
 
 def analyze_liquidity(
     volume_history: List[float],
-    min_avg_volume: int = 250_000,
+    min_avg_volume: int = 2000,
     lookback: int = 30
 ) -> LiquidityContext:
     """
@@ -37,7 +37,7 @@ def analyze_liquidity(
     # Safety: not enough data
     if not volume_history or len(volume_history) < lookback:
         return LiquidityContext(
-            score=-2.0,
+            score=-1.0,
             level="ILLIQUID",
             avg_volume=0.0,
             consistency="UNSTABLE",
@@ -48,9 +48,8 @@ def analyze_liquidity(
     avg_vol = sum(recent) / lookback
 
     # -----------------------------
-    # 1️⃣ Liquidity Level
+    # 1️⃣ Liquidity Level (1-min bar shares)
     # -----------------------------
-    # Simple thresholds (tunable)
     if avg_vol >= min_avg_volume * 4:
         level = "HIGH"
         base_score = 2.0
@@ -65,7 +64,7 @@ def analyze_liquidity(
         comment_base = "Low average volume"
     else:
         level = "ILLIQUID"
-        base_score = -1.5
+        base_score = -1.0
         comment_base = "Below minimum volume threshold"
 
     # -----------------------------
@@ -99,7 +98,7 @@ def analyze_liquidity(
 # Backward Compatibility
 # =========================
 
-def is_liquid(volume_history: List[float], min_avg_volume: int = 250000, lookback: int = 30) -> bool:
+def is_liquid(volume_history: List[float], min_avg_volume: int = 2000, lookback: int = 30) -> bool:
     """
     Legacy boolean liquidity filter.
 

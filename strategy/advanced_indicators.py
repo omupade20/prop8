@@ -135,3 +135,51 @@ def compute_adx(highs: List[float], lows: List[float], closes: List[float], peri
     # Smooth ADX over last `period`
     adx_vals = [dx] * period
     return sum(adx_vals) / period
+
+
+import math
+
+def compute_vwap_sd_bands(
+    highs: List[float],
+    lows: List[float],
+    closes: List[float],
+    volumes: List[float]
+) -> Optional[dict]:
+    """
+    Computes VWAP with Standard Deviation Dispersion Bands (±1σ, ±2σ, ±2.5σ).
+    Identifies extreme overextensions (statistical rubber-band) and high-probability mean-reversions.
+    """
+    if not highs or not lows or not closes or not volumes or len(closes) < 10:
+        return None
+
+    n = min(len(closes), len(highs), len(lows), len(volumes))
+    cum_pv = 0.0
+    cum_v = 0.0
+    tps = []
+
+    for i in range(n):
+        tp = (highs[i] + lows[i] + closes[i]) / 3.0
+        v = max(volumes[i], 1.0)
+        cum_pv += tp * v
+        cum_v += v
+        tps.append((tp, v))
+
+    if cum_v <= 0:
+        return None
+
+    vwap = cum_pv / cum_v
+
+    # Compute volume-weighted standard deviation
+    cum_var = sum(v * ((tp - vwap) ** 2) for tp, v in tps)
+    std_dev = math.sqrt(cum_var / cum_v) if cum_v > 0 else 0.0
+
+    return {
+        "vwap": round(vwap, 2),
+        "std_dev": round(std_dev, 2),
+        "upper_1": round(vwap + 1.0 * std_dev, 2),
+        "upper_2": round(vwap + 2.0 * std_dev, 2),
+        "upper_2_5": round(vwap + 2.5 * std_dev, 2),
+        "lower_1": round(vwap - 1.0 * std_dev, 2),
+        "lower_2": round(vwap - 2.0 * std_dev, 2),
+        "lower_2_5": round(vwap - 2.5 * std_dev, 2),
+    }

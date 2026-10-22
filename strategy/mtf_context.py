@@ -36,7 +36,7 @@ def _is_bearish(candle: dict) -> bool:
 def _persistence_score(history: List[dict]) -> float:
     """
     Persistence bonus based on last 3 candles.
-    Returns 0.0 / 0.3 / 0.6
+    Returns signed value: +0.3/+0.6 for bullish, -0.3/-0.6 for bearish.
     """
     if not history or len(history) < 2:
         return 0.0
@@ -45,10 +45,14 @@ def _persistence_score(history: List[dict]) -> float:
     bull = sum(1 for c in last if _is_bullish(c))
     bear = sum(1 for c in last if _is_bearish(c))
 
-    if bull == 3 or bear == 3:
+    if bull == 3:
         return 0.6
-    if bull >= 2 or bear >= 2:
+    if bear == 3:
+        return -0.6
+    if bull >= 2:
         return 0.3
+    if bear >= 2:
+        return -0.3
     return 0.0
 
 
@@ -116,13 +120,13 @@ def analyze_mtf(
         p5 = _persistence_score(history_5m)
         if p5:
             score += p5
-            comments.append(f"5m persistence +{p5}")
+            comments.append(f"5m persistence {p5:+.1f}")
 
     if history_15m:
         p15 = _persistence_score(history_15m)
         if p15:
             score += p15
-            comments.append(f"15m persistence +{p15}")
+            comments.append(f"15m persistence {p15:+.1f}")
 
     # ---------------------
     # Final Direction

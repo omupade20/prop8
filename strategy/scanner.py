@@ -51,11 +51,29 @@ class MarketScanner:
         # metrics
         self.bars_received = 0
         self.bars_closed = 0
-        self.replay_mode = False
+        # Real-time Order Flow Delta (CVD - Cumulative Volume Delta)
+        self._order_flow_delta: Dict[str, float] = defaultdict(float)
+        self._last_ticks: Dict[str, Dict[str, float]] = {}
 
         # ensure snapshot directory exists when saving
         if self.snapshot_path:
             os.makedirs(os.path.dirname(self.snapshot_path), exist_ok=True)
+
+    def update_order_flow_tick(self, inst: str, price: float, volume: float):
+        """Calculates tick-level aggressive market orders (Buyer vs Seller delta)."""
+        if inst in self._last_ticks:
+            last_p = self._last_ticks[inst]["price"]
+            last_v = self._last_ticks[inst]["volume"]
+            delta_vol = max(0.0, volume - last_v)
+            if price > last_p:
+                self._order_flow_delta[inst] += delta_vol
+            elif price < last_p:
+                self._order_flow_delta[inst] -= delta_vol
+        self._last_ticks[inst] = {"price": price, "volume": volume}
+
+    def get_order_flow_delta(self, inst: str) -> float:
+        """Returns Cumulative Volume Delta for instrument."""
+        return self._order_flow_delta.get(inst, 0.0)
 
     # ---------------------
     # Internal helpers
@@ -68,6 +86,18 @@ class MarketScanner:
     def _lock_for(self, inst: str):
         # simple per-instrument lock object
         return self._locks[inst]
+
+    def warmup_candles(self, inst: str, candles: List[dict]):
+        """
+        Preload historical candles (from Upstox History API) into scanner buffer.
+        """
+        if not candles:
+            return
+        self._ensure_inst(inst)
+        with self._lock_for(inst):
+            for c in candles:
+                if all(k in c for k in ("time", "open", "high", "low", "close", "volume")):
+                    self._bars[inst].append(c)
 
     # ---------------------
     # Append / ingestion
@@ -104,7 +134,6 @@ class MarketScanner:
             try:
                 cb(inst, bar)
             except Exception:
-                # callbacks should be robust; do not raise
                 pass
 
         return bar
@@ -112,29 +141,41 @@ class MarketScanner:
     def append_tick(self, inst: str, timestamp: datetime, price: float, volume: float):
         """
         Aggregate a tick into the current minute bar.
-        This method builds the active 1-minute bar from ticks when the feed is tick-level.
-        If you already receive 1-minute OHLC, prefer append_ohlc_bar.
+        Detects minute boundary roll-over and triggers on_bar_close.
         """
         self._ensure_inst(inst)
         ts_min = timestamp.replace(second=0, microsecond=0)
         time_iso = ts_min.strftime(ISOFMT)
 
+        closed_bar = None
         with self._lock_for(inst):
             bars = self._bars[inst]
             if not bars or bars[-1]["time"] != time_iso:
+                # Previous bar has closed
+                if bars:
+                    closed_bar = dict(bars[-1])
+                    self.bars_closed += 1
                 # start a new bar
                 bar = {"time": time_iso, "open": price, "high": price, "low": price, "close": price, "volume": volume}
                 bars.append(bar)
                 self.bars_received += 1
-                # We do NOT trigger callbacks on first tick of bar; only when the bar is closed via append_ohlc_bar
             else:
                 # update existing in-progress bar
                 bar = bars[-1]
                 bar["high"] = max(bar["high"], price)
                 bar["low"] = min(bar["low"], price)
                 bar["close"] = price
-                bar["volume"] = bar.get("volume", 0) + volume
+                # volume: track maximum observed or updated value, avoiding tick-multiplied inflation
+                bar["volume"] = max(bar.get("volume", 0), volume)
                 self.bars_received += 1
+
+        # notify callbacks when previous minute bar closed
+        if closed_bar:
+            for cb in list(self._on_bar_close_callbacks):
+                try:
+                    cb(inst, closed_bar)
+                except Exception:
+                    pass
 
     def update(
         self,
@@ -144,17 +185,46 @@ class MarketScanner:
         low: float,
         close: float,
         volume: float,
-        time_iso: Optional[str] = None
+        time_iso: Optional[str] = None,
+        open_p: Optional[float] = None
     ):
         """
-        Backwards-compatible method matching your old interface.
-        Treat this as a direct append of a 1-minute bar when time_iso provided,
-        otherwise treat as a tick aggregator using current time.
+        Ingest incoming feed update. If time_iso is passed, updates or appends bar.
         """
         if time_iso:
-            self.append_ohlc_bar(instrument, time_iso, price, high, low, close, volume)
+            self._ensure_inst(instrument)
+            closed_bar = None
+            with self._lock_for(instrument):
+                bars = self._bars[instrument]
+                if bars and bars[-1]["time"] == time_iso:
+                    # Update in-progress bar with latest high, low, close, volume
+                    bars[-1]["high"] = max(bars[-1]["high"], high, price)
+                    bars[-1]["low"] = min(bars[-1]["low"], low, price)
+                    bars[-1]["close"] = close or price
+                    bars[-1]["volume"] = max(bars[-1].get("volume", 0), volume)
+                else:
+                    if bars:
+                        closed_bar = dict(bars[-1])
+                        self.bars_closed += 1
+                    bar = {
+                        "time": time_iso,
+                        "open": open_p if open_p is not None else price,
+                        "high": max(high, price),
+                        "low": min(low, price),
+                        "close": close or price,
+                        "volume": volume
+                    }
+                    bars.append(bar)
+                    self.bars_received += 1
+
+
+            if closed_bar:
+                for cb in list(self._on_bar_close_callbacks):
+                    try:
+                        cb(instrument, closed_bar)
+                    except Exception:
+                        pass
         else:
-            # if no timestamp passed, assume current minute
             self.append_tick(instrument, datetime.now(), price, volume)
 
     # ---------------------
@@ -179,6 +249,9 @@ class MarketScanner:
     def get_prices(self, inst: str) -> List[float]:
         return [b["close"] for b in self.get_last_n_bars(inst, self.max_len)]
 
+    def get_opens(self, inst: str) -> List[float]:
+        return [b["open"] for b in self.get_last_n_bars(inst, self.max_len)]
+
     def get_highs(self, inst: str) -> List[float]:
         return [b["high"] for b in self.get_last_n_bars(inst, self.max_len)]
 
@@ -193,6 +266,13 @@ class MarketScanner:
 
     def get_last_n_closes(self, inst: str, n: int) -> List[float]:
         return [b["close"] for b in self.get_last_n_bars(inst, n)]
+
+    def get_bar_count(self, inst: str) -> int:
+        if inst not in self._bars:
+            return 0
+        with self._lock_for(inst):
+            return len(self._bars[inst])
+
 
     def has_enough_data(self, inst: str, min_bars: int = 30) -> bool:
         return (inst in self._bars and len(self._bars[inst]) >= min_bars)

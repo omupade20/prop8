@@ -47,12 +47,19 @@ class MTFBuilder:
 
     def update(self, inst_key: str, timestamp: Union[str, datetime], o: float, h: float, l: float, c: float, v: float):
         """
-        Add a 1-minute bar. timestamp may be ISO string or datetime.
-        We normalize to minute boundary automatically.
+        Add or update a 1-minute bar. Normalizes to minute boundary.
+        If a bar for this minute already exists, updates high/low/close/volume.
         """
         t_iso = _to_minute_iso(timestamp)
-        bar = {"time": t_iso, "open": o, "high": h, "low": l, "close": c, "volume": v}
-        self.buffers[inst_key].append(bar)
+        buf = self.buffers[inst_key]
+        if buf and buf[-1]["time"] == t_iso:
+            buf[-1]["high"] = max(buf[-1]["high"], h)
+            buf[-1]["low"] = min(buf[-1]["low"], l)
+            buf[-1]["close"] = c
+            buf[-1]["volume"] = max(buf[-1]["volume"], v)
+        else:
+            bar = {"time": t_iso, "open": o, "high": h, "low": l, "close": c, "volume": v}
+            buf.append(bar)
 
     def _aggregate(self, bars: List[dict]) -> dict:
         """

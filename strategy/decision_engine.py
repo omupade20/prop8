@@ -32,6 +32,7 @@ def final_trade_decision(
     htf_bias_label: str,
     vwap_ctx: VWAPContext,
     breakout_signal: Optional[Dict],
+    opens: Optional[list[float]] = None,
 ) -> DecisionResult:
 
     components: Dict[str, float] = {}
@@ -40,10 +41,12 @@ def final_trade_decision(
     # -------------------- STRUCTURE GATE --------------------
 
     if not breakout_signal:
-        return DecisionResult("IGNORE", 0.0, None, {}, "no breakout")
+        return DecisionResult("IGNORE", 0.0, None, {}, "no valid setup")
 
     direction = breakout_signal["direction"]
-    signal_type = breakout_signal["signal"]
+    signal_type = breakout_signal.get("signal", "EXECUTE")
+    setup_name = breakout_signal.get("setup_name", "BREAKOUT")
+    components["setup_type"] = setup_name
 
     if signal_type == "POTENTIAL":
         components["breakout"] = 1.0
@@ -52,11 +55,13 @@ def final_trade_decision(
             score=1.0,
             direction=direction,
             components=components,
-            reason="potential breakout"
+            reason=f"potential {setup_name}"
         )
 
-    components["breakout"] = 3.0
-    score += 3.0
+    # High-conviction setups (Pullbacks & Squeezes) get high structural score
+    base_score = 3.2 if setup_name in ["PULLBACK_RETEST", "SQUEEZE_BREAKOUT"] else 3.0
+    components["breakout"] = base_score
+    score += base_score
 
     # -------------------- HTF & REGIME --------------------
 
@@ -69,12 +74,15 @@ def final_trade_decision(
     components["htf"] = 1.2
     score += 1.2
 
-    if market_regime in ("WEAK", "COMPRESSION"):
-        return DecisionResult("IGNORE", 0.0, None, {}, "bad market regime")
-
-    if market_regime == "EARLY_TREND":
+    if market_regime == "WEAK":
+        return DecisionResult("IGNORE", 0.0, None, {}, "weak choppy market regime")
+    elif market_regime == "COMPRESSION":
+        # Pre-breakout compression is valid setup foundation
         components["regime"] = 0.8
         score += 0.8
+    elif market_regime == "EARLY_TREND":
+        components["regime"] = 1.0
+        score += 1.0
     elif market_regime == "TRENDING":
         components["regime"] = 1.2
         score += 1.2
@@ -87,8 +95,14 @@ def final_trade_decision(
     if direction == "SHORT" and vwap_ctx.acceptance == "ABOVE":
         return DecisionResult("IGNORE", 0.0, None, {}, "above VWAP")
 
-    components["vwap"] = vwap_ctx.score
-    score += vwap_ctx.score
+    # Invert sign for SHORT so bearish VWAP adds to the execution score
+    if direction == "SHORT":
+        vwap_contribution = abs(vwap_ctx.score) if vwap_ctx.acceptance == "BELOW" else -abs(vwap_ctx.score)
+    else:
+        vwap_contribution = vwap_ctx.score if vwap_ctx.acceptance == "ABOVE" else -abs(vwap_ctx.score)
+
+    components["vwap"] = round(vwap_contribution, 2)
+    score += vwap_contribution
 
     # -------------------- VOLUME (SLIGHTLY STRICTER) --------------------
 
@@ -119,13 +133,14 @@ def final_trade_decision(
     components["liquidity"] = liq_ctx.score
     score += liq_ctx.score
 
-    # -------------------- PRICE ACTION (MINOR GATE ADDED) --------------------
+    # -------------------- PRICE ACTION --------------------
 
+    actual_opens = opens if opens and len(opens) == len(closes) else closes
     pa_ctx = price_action_context(
         prices=closes,
         highs=highs,
         lows=lows,
-        opens=closes,
+        opens=actual_opens,
         closes=closes,
         ema_short=exponential_moving_average(prices, 9),
         ema_long=exponential_moving_average(prices, 21),
@@ -138,8 +153,14 @@ def final_trade_decision(
     if direction == "SHORT" and pa_ctx["score"] > 0:
         return DecisionResult("IGNORE", 0.0, None, {}, "price action not supportive")
 
-    components["price_action"] = pa_ctx["score"]
-    score += pa_ctx["score"]
+    # For SHORT, bearish price action (negative pa_ctx score) adds positive conviction
+    if direction == "SHORT":
+        pa_contribution = abs(pa_ctx["score"]) if pa_ctx["score"] <= 0 else -pa_ctx["score"]
+    else:
+        pa_contribution = pa_ctx["score"]
+
+    components["price_action"] = round(pa_contribution, 2)
+    score += pa_contribution
 
     # -------------------- SUPPORT / RESISTANCE (SLIGHTLY STRICTER) --------------------
 
@@ -154,22 +175,37 @@ def final_trade_decision(
     components["sr"] = sr_score
     score += sr_score * 0.7
 
-    # -------------------- RSI (STRICTER MOMENTUM) --------------------
+    # -------------------- RSI (STRICT MOMENTUM & CLIMAX EXHAUSTION GUARDS) --------------------
 
     rsi = relative_strength_index(prices, 14)
 
-    if rsi:
+    if rsi is not None:
+        components["rsi"] = round(rsi, 1)
         if direction == "LONG":
+            if rsi > 68:
+                return DecisionResult("IGNORE", 0.0, None, {}, f"overbought climax exhaustion long (RSI={rsi:.1f} > 68)")
             if rsi < 50:
                 score -= 1.0
             if rsi < 40:
                 return DecisionResult("IGNORE", 0.0, None, {}, "weak momentum long")
 
         if direction == "SHORT":
+            if rsi < 32:
+                return DecisionResult("IGNORE", 0.0, None, {}, f"oversold climax exhaustion short (RSI={rsi:.1f} < 32)")
             if rsi > 50:
                 score -= 1.0
             if rsi > 60:
                 return DecisionResult("IGNORE", 0.0, None, {}, "weak momentum short")
+
+    # -------------------- SECTOR SYMPATHY GATE --------------------
+    try:
+        from strategy.sector_manager import get_sector_manager
+        sec_mgr = get_sector_manager()
+        is_aligned, sec_reason = sec_mgr.check_sector_sympathy(inst_key, direction)
+        if not is_aligned:
+            return DecisionResult("IGNORE", 0.0, None, {}, sec_reason)
+    except Exception:
+        pass
 
     # -------------------- FINAL DECISION --------------------
 

@@ -4,7 +4,10 @@ import websocket
 import threading
 import requests
 from config.settings import ACCESS_TOKEN
-import MarketDataFeedV3_pb2 as pb
+try:
+    from upstox_client.feeder.proto import MarketDataFeedV3_pb2 as pb
+except ImportError:
+    import MarketDataFeedV3_pb2 as pb
 
 """
 WebSocket V3 client to connect to Upstox Market Data Feed,
